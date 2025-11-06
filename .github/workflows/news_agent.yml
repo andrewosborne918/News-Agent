@@ -50,7 +50,7 @@ jobs:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           AI_HORDE_API_KEY: ${{ secrets.AI_HORDE_API_KEY }}
         run: |
-          python generate_segments.py --auto --country us --topic politics --duration 4.0 --model "gemini-2.5-flash" --max-words 15 --min-words 10
+          python generate_segments.py --auto --country us --topic politics --duration 3.5 --model "gemini-2.5-flash" --max-words 15 --min-words 10
 
       - name: Install FFmpeg and fonts
         run: |
