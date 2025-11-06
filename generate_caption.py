@@ -2,6 +2,9 @@
 """
 Generate engaging title, description, and hashtags from video content.
 Uses Gemini AI to analyze the segments and create compelling social media captions.
+
+This script analyzes the generated news commentary and creates optimized captions
+for social media platforms (Twitter, Instagram, Facebook, LinkedIn).
 """
 
 import os
