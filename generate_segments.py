@@ -268,18 +268,23 @@ def suggest_photo_search_terms(answer_text: str, article_text: str, model_name: 
     
     try:
         genai.configure(api_key=key)
-        prompt = f"""Based on this news answer and article context, suggest 2-4 words for searching stock photos that would visually represent the content.
+        prompt = f"""You are helping select stock photos for a political news video. Based on the answer and article context below, suggest 2-4 words for a stock photo search.
 
 Answer: {answer_text[:300]}
 
 Article Context: {article_text[:500]}
 
-Requirements:
-- Use concrete, visual subjects (people, places, objects, symbols)
-- Match the tone (serious, political, economic, etc.)
-- Avoid abstract concepts
-- Be specific but photographable
-- Examples: "government building washington", "financial district stocks", "protest crowd capitol", "military personnel uniform"
+RULES FOR PHOTO SUGGESTIONS:
+1. For political topics: suggest "capitol building", "government chamber", "political debate", "voting booth", "american flag"
+2. For policy/law topics: suggest "courthouse steps", "legal documents", "congressional hearing", "government officials"
+3. For economic topics: suggest "financial district", "stock market", "business meeting", "economic data"
+4. For military/security: suggest "military honor guard", "border patrol", "defense officials", "security personnel"
+5. For social issues: suggest "diverse community", "town hall meeting", "public gathering", "city street"
+6. AVOID: medical imagery, vaccines, healthcare if the topic is about politics/policy
+7. AVOID: abstract concepts - stay concrete and photographable
+8. AVOID: controversial or sensitive imagery
+
+Choose terms that are professional, neutral, and visually represent the political/policy nature of the content.
 
 Photo search terms (2-4 words only):"""
         
@@ -291,6 +296,13 @@ Photo search terms (2-4 words only):"""
         suggestion = suggestion.split('\n')[0].strip()
         words = suggestion.split()[:4]  # Max 4 words
         suggestion = " ".join(words)
+        
+        # Filter out inappropriate terms
+        inappropriate_terms = ['vaccine', 'syringe', 'needle', 'medical', 'doctor', 'hospital', 'clinic']
+        suggestion_lower = suggestion.lower()
+        if any(term in suggestion_lower for term in inappropriate_terms):
+            print(f"  ⚠️ Filtered inappropriate AI suggestion: '{suggestion}'")
+            return ""
         
         if suggestion and len(suggestion) > 3:
             print(f"  🤖 AI suggested photo search: '{suggestion}'")
