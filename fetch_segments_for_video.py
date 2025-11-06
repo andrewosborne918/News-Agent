@@ -8,6 +8,48 @@ import json
 import gspread
 from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
+from gspread.exceptions import APIError
+import time
+import random
+
+def _with_retry(call, *, retries: int = 6, base_delay: float = 0.6, retriable_statuses=(429, 500, 502, 503, 504)):
+    """Generic retry with exponential backoff for Sheets transient errors."""
+    def _parse_status_code(err: Exception) -> int:
+        try:
+            code = getattr(err, "response", None)
+            if code is not None:
+                sc = getattr(code, "status_code", None)
+                if sc:
+                    return int(sc)
+        except Exception:
+            pass
+        try:
+            import re as _re
+            m = _re.search(r"'code':\s*(\d+)", str(err))
+            if m:
+                return int(m.group(1))
+        except Exception:
+            pass
+        return 0
+
+    for attempt in range(retries):
+        try:
+            return call()
+        except APIError as e:
+            code = _parse_status_code(e)
+            if code in retriable_statuses and attempt < retries - 1:
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.25)
+                print(f"  ⏳ Sheets API {code}; retrying in {delay:.2f}s (attempt {attempt+1}/{retries})")
+                time.sleep(delay)
+                continue
+            raise
+        except Exception as e:
+            if attempt < retries - 1:
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.25)
+                print(f"  ⏳ Transient error; retrying in {delay:.2f}s (attempt {attempt+1}/{retries}) - {e}")
+                time.sleep(delay)
+                continue
+            raise
 
 def fetch_latest_segments(sheet_key: str, creds_path: str, run_id: str = None):
     """Fetch segments from Google Sheets for the latest or specified run."""
@@ -18,11 +60,11 @@ def fetch_latest_segments(sheet_key: str, creds_path: str, run_id: str = None):
         scopes=['https://www.googleapis.com/auth/spreadsheets']
     )
     gc = gspread.authorize(creds)
-    sh = gc.open_by_key(sheet_key)
+    sh = _with_retry(lambda: gc.open_by_key(sheet_key))
     
     # Get all segments
-    ws = sh.worksheet('AnswerSegments')
-    rows = ws.get_all_records()
+    ws = _with_retry(lambda: sh.worksheet('AnswerSegments'))
+    rows = _with_retry(lambda: ws.get_all_records())
     
     if not rows:
         print("❌ No segments found in sheet")

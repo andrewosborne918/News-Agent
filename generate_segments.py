@@ -24,6 +24,7 @@ import re
 import time
 import argparse
 import datetime as dt
+import random
 from typing import List, Tuple
 from urllib.parse import urlparse, urlunparse
 
@@ -32,6 +33,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import gspread
 import google.generativeai as genai
+from gspread.exceptions import APIError
 
 # Auto-pick support (NewsData.io). Ensure news_picker.py is in the same folder.
 try:
@@ -225,19 +227,67 @@ def load_env_or_die():
         sys.exit("Service account key not found at GOOGLE_SERVICE_ACCOUNT_JSON_PATH")
     return sheet_key, creds_path, gemini_key
 
+def _parse_status_code_from_apierror(err: APIError) -> int:
+    """Best-effort to extract HTTP status code from gspread APIError."""
+    try:
+        code = getattr(err, "response", None)
+        if code is not None:
+            sc = getattr(code, "status_code", None)
+            if sc:
+                return int(sc)
+    except Exception:
+        pass
+    # Fallback to parsing string contents like ***'code': 503, ...***
+    try:
+        import re as _re
+        m = _re.search(r"'code':\s*(\d+)", str(err))
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return 0
+
+def _with_retry(call, *, retries: int = 6, base_delay: float = 0.6, retriable_statuses=(429, 500, 502, 503, 504)):
+    """
+    Execute `call` with exponential backoff for common transient Google Sheets errors.
+    - Retries on gspread.APIError with status in retriable_statuses
+    - Also retries on requests-related network errors
+    """
+    for attempt in range(retries):
+        try:
+            return call()
+        except APIError as e:
+            code = _parse_status_code_from_apierror(e)
+            if code in retriable_statuses and attempt < retries - 1:
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.25)
+                print(f"  ⏳ Sheets API {code}; retrying in {delay:.2f}s (attempt {attempt+1}/{retries})")
+                time.sleep(delay)
+                continue
+            raise
+        except (requests.exceptions.RequestException, ConnectionError, TimeoutError) as e:
+            if attempt < retries - 1:
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.25)
+                print(f"  ⏳ Network error; retrying in {delay:.2f}s (attempt {attempt+1}/{retries}) - {e}")
+                time.sleep(delay)
+                continue
+            raise
+
 def gs_client():
     return gspread.service_account(filename=os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON_PATH"))
 
 def open_sheet(sheet_key: str):
-    return gs_client().open_by_key(sheet_key)
+    # Opening can occasionally 503 as well
+    return _with_retry(lambda: gs_client().open_by_key(sheet_key))
 
 def read_active_questions(sh, tab="Questions") -> List[Tuple[str, str]]:
-    rows = sh.worksheet(tab).get_all_records()
+    ws = _with_retry(lambda: sh.worksheet(tab))
+    rows = _with_retry(lambda: ws.get_all_records())
     return [(r["question_id"], r["question_text"]) for r in rows if str(r.get("enabled", "TRUE")).upper() == "TRUE"]
 
 def append_rows_safe(ws, rows: List[List], batch_size: int = 100):
     for i in range(0, len(rows), batch_size):
-        ws.append_rows(rows[i:i + batch_size], value_input_option="RAW")
+        chunk = rows[i:i + batch_size]
+        _with_retry(lambda: ws.append_rows(chunk, value_input_option="RAW"))
         time.sleep(0.2)
 
 # ========================= Gemini =========================
@@ -453,14 +503,15 @@ def main():
             rows_to_append.append([run_id, qid, idx, sent, img_path, args.duration])
 
     # Write segments
-    ws_segments = sh.worksheet("AnswerSegments")
+    ws_segments = _with_retry(lambda: sh.worksheet("AnswerSegments"))
     append_rows_safe(ws_segments, rows_to_append)
 
     # Write run row (best-effort)
     try:
-        sh.worksheet("Runs").append_rows([[
+        ws_runs = _with_retry(lambda: sh.worksheet("Runs"))
+        _with_retry(lambda: ws_runs.append_rows([[
             run_id, url, title or "", dt.datetime.utcnow().isoformat() + "Z", 0.0
-        ]], value_input_option="RAW")
+        ]], value_input_option="RAW"))
     except Exception:
         pass
 
