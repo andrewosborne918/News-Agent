@@ -69,23 +69,35 @@ def create_buffer_post(access_token, profile_ids, text, media_id=None, video_thu
     return response.json()
 
 
-def generate_caption(run_id):
-    """Generate a caption for the video post."""
-    # You can customize this based on your content
-    captions = [
-        "🔥 Breaking down today's biggest political story",
-        "📰 What you need to know about today's news",
-        "🎯 The facts behind today's headlines",
-        "💡 Today's political commentary",
-        "📊 Analyzing today's top story",
-    ]
+def load_caption_data(caption_file="generated/caption.json"):
+    """Load the AI-generated caption from file."""
+    caption_path = Path(caption_file)
     
-    # Rotate based on run_id for variety
-    import hashlib
-    hash_val = int(hashlib.md5(run_id.encode()).hexdigest(), 16)
-    caption = captions[hash_val % len(captions)]
+    if not caption_path.exists():
+        print(f"⚠️  Caption file not found: {caption_file}")
+        return None
     
-    return f"{caption}\n\n#News #Politics #Breaking"
+    with open(caption_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def format_caption_for_buffer(caption_data):
+    """Format caption data for Buffer post."""
+    if not caption_data:
+        # Fallback caption
+        return "� Today's political news analysis\n\n#News #Politics #Breaking"
+    
+    title = caption_data.get("title", "Political News Update")
+    description = caption_data.get("description", "Watch for analysis")
+    hashtags = caption_data.get("hashtags", ["News", "Politics"])
+    
+    # Format hashtags
+    hashtag_string = " ".join([f"#{tag}" for tag in hashtags])
+    
+    # Create full caption
+    caption = f"{title}\n\n{description}\n\n{hashtag_string}"
+    
+    return caption
 
 
 def main():
@@ -129,9 +141,15 @@ def main():
         
         print(f"✅ Video uploaded successfully (media_id: {media_id})")
         
-        # Step 3: Create post with video
-        caption = generate_caption(run_id)
-        print(f"📝 Caption: {caption}")
+        # Step 3: Load AI-generated caption
+        print("📝 Loading caption data...")
+        caption_data = load_caption_data()
+        caption = format_caption_for_buffer(caption_data)
+        
+        print(f"📝 Caption ({len(caption)} chars):")
+        print("-" * 60)
+        print(caption)
+        print("-" * 60)
         print("📮 Creating Buffer post...")
         
         post_response = create_buffer_post(
