@@ -63,20 +63,26 @@ def put_text_on_image(img_path, txt_path, out_path):
     """
     im = Image.open(img_path).convert("RGB")
     
-    # Letterbox to 9:16 (portrait) while preserving aspect ratio
+    # Fill the entire frame by scaling to cover and cropping excess
     im_ratio = im.width / im.height
     vid_ratio = VIDEO_W / VIDEO_H
     
-    if abs(im_ratio - vid_ratio) > 0.01:
-        # Scale to fit width, then pad top/bottom
+    if im_ratio > vid_ratio:
+        # Image is wider - scale to height and crop sides
+        scale = VIDEO_H / im.height
+        new_w = int(im.width * scale)
+        resized = im.resize((new_w, VIDEO_H), Image.LANCZOS)
+        # Center crop
+        x = (new_w - VIDEO_W) // 2
+        canvas = resized.crop((x, 0, x + VIDEO_W, VIDEO_H))
+    else:
+        # Image is taller - scale to width and crop top/bottom
         scale = VIDEO_W / im.width
         new_h = int(im.height * scale)
         resized = im.resize((VIDEO_W, new_h), Image.LANCZOS)
-        canvas = Image.new("RGB", (VIDEO_W, VIDEO_H), (0, 0, 0))
-        y = (VIDEO_H - new_h) // 2
-        canvas.paste(resized, (0, y))
-    else:
-        canvas = im.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
+        # Center crop
+        y = (new_h - VIDEO_H) // 2
+        canvas = resized.crop((0, y, VIDEO_W, y + VIDEO_H))
 
     # Draw semi-transparent overlay for text readability
     draw = ImageDraw.Draw(canvas, "RGBA")
@@ -178,10 +184,14 @@ def main():
     # Use absolute paths for output, relative path for inputs (which are in work/)
     abs_video_no_audio = video_no_audio.absolute()
     
+    # Ken Burns effect: subtle zoom from 1.0x to 1.1x scale over the video duration
+    # zoompan parameters: z='zoom level', d='duration in frames', s='output size'
+    zoom_effect = f"zoompan=z='min(zoom+0.0015,1.1)':d=1:s={VIDEO_W}x{VIDEO_H}"
+    
     run_ffmpeg([
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0", "-i", "inputs.txt",
-        "-vf", f"format=yuv420p,fade=t=in:st=0:d={FADE_SEC},fade=t=out:st={total_duration-FADE_SEC}:d={FADE_SEC}",
+        "-vf", f"{zoom_effect},format=yuv420p,fade=t=in:st=0:d={FADE_SEC},fade=t=out:st={total_duration-FADE_SEC}:d={FADE_SEC}",
         "-r", "30",
         "-pix_fmt", "yuv420p",
         "-c:v", "libx264",
