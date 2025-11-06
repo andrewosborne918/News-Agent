@@ -46,8 +46,39 @@ def fetch_latest_segments(sheet_key: str, creds_path: str, run_id: str = None):
                 'sentence_index': r.get('sentence_index', 0)
             })
     
-    # Sort by question_id and sentence_index to ensure proper order
-    segments.sort(key=lambda x: (x['question_id'], x['sentence_index']))
+    # Sort by a predefined section order, then by sentence_index to ensure proper order
+    # Desired narrative order for the video
+    section_order = [
+        'what_happened',
+        'why_it_matters',
+        'conservative_angle',
+        'next_steps',
+    ]
+    order_map = {name: i for i, name in enumerate(section_order)}
+
+    def normalize_section(value: str) -> str:
+        v = (value or '').strip().lower()
+        if v.startswith('what'):
+            return 'what_happened'
+        if v.startswith('why'):
+            return 'why_it_matters'
+        if v.startswith('conservative'):
+            return 'conservative_angle'
+        if v.startswith('next'):
+            return 'next_steps'
+        return v
+
+    # Normalize sentence_index to int to avoid lexicographic issues
+    for s in segments:
+        try:
+            s['sentence_index'] = int(s.get('sentence_index') or 0)
+        except Exception:
+            s['sentence_index'] = 0
+
+    for s in segments:
+        s['question_id'] = normalize_section(s.get('question_id'))
+
+    segments.sort(key=lambda x: (order_map.get(x['question_id'], 999), x['sentence_index']))
     
     print(f"✅ Found {len(segments)} segments")
     return {
@@ -72,12 +103,28 @@ def save_segments_for_video(data: dict, output_dir: str = 'generated'):
     """Save segments as numbered image + text files for video generation"""
     import requests
     from pathlib import Path
+    from PIL import Image, ImageDraw, ImageFont
     
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True, parents=True)
     
     print(f"\n📥 Downloading images and saving text to {output_dir}/")
     
+    def make_placeholder(path: Path, message: str = "Image unavailable"):
+        W, H = 1080, 1920
+        img = Image.new("RGB", (W, H), color=(30, 30, 30))
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+        except Exception:
+            font = ImageFont.load_default()
+        text_w, text_h = draw.textbbox((0,0), message, font=font)[2:]
+        x = (W - text_w)//2
+        y = (H - text_h)//2
+        draw.text((x+2, y+2), message, font=font, fill=(0,0,0))
+        draw.text((x, y), message, font=font, fill=(255,255,255))
+        img.save(path, quality=90)
+
     for idx, seg in enumerate(data['segments'], start=1):
         # Save text file
         text_file = output_path / f"{idx:04d}.txt"
@@ -98,9 +145,13 @@ def save_segments_for_video(data: dict, output_dir: str = 'generated'):
             if download_image(image_url, str(image_file)):
                 print(f"  ✓ {idx:04d}: {seg['sentence_text'][:50]}...")
             else:
-                print(f"  ✗ {idx:04d}: Failed to download image")
+                print(f"  ✗ {idx:04d}: Failed to download image — creating placeholder")
+                image_file = output_path / f"{idx:04d}.jpg"
+                make_placeholder(image_file)
         else:
-            print(f"  ⚠️  {idx:04d}: No image URL")
+            print(f"  ⚠️  {idx:04d}: No image URL — creating placeholder")
+            image_file = output_path / f"{idx:04d}.jpg"
+            make_placeholder(image_file)
     
     print(f"✅ Saved {len(data['segments'])} segments to {output_dir}/")
 

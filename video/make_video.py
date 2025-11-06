@@ -153,9 +153,19 @@ def main():
     
     ensure_dirs()
     
-    # Find all images
-    images = sorted(glob.glob(str(INPUT_DIR / "*.jpg"))) + \
-             sorted(glob.glob(str(INPUT_DIR / "*.png")))
+    # Find all images and sort numerically by stem (e.g., 0001, 0002) regardless of extension
+    patterns = ["*.jpg", "*.jpeg", "*.png"]
+    images = []
+    for pat in patterns:
+        images.extend(glob.glob(str(INPUT_DIR / pat)))
+
+    def numeric_key(p):
+        try:
+            return int(Path(p).stem)
+        except ValueError:
+            return float('inf')  # non-numeric names go last
+
+    images = sorted(images, key=numeric_key)
     
     if not images:
         raise SystemExit(f"❌ No images found in {INPUT_DIR}")
