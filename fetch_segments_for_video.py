@@ -55,7 +55,64 @@ def fetch_latest_segments(sheet_key: str, creds_path: str, run_id: str = None):
         'segments': segments
     }
 
+def download_image(url: str, output_path: str):
+    """Download an image from URL to local file"""
+    import requests
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        with open(output_path, 'wb') as f:
+            f.write(response.content)
+        return True
+    except Exception as e:
+        print(f"⚠️  Failed to download {url}: {e}")
+        return False
+
+def save_segments_for_video(data: dict, output_dir: str = 'generated'):
+    """Save segments as numbered image + text files for video generation"""
+    import requests
+    from pathlib import Path
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True, parents=True)
+    
+    print(f"\n📥 Downloading images and saving text to {output_dir}/")
+    
+    for idx, seg in enumerate(data['segments'], start=1):
+        # Save text file
+        text_file = output_path / f"{idx:04d}.txt"
+        text_file.write_text(seg['sentence_text'], encoding='utf-8')
+        
+        # Download and save image
+        image_url = seg['image_path']
+        if image_url and image_url.startswith('http'):
+            # Determine extension from URL or default to jpg
+            ext = '.jpg'
+            if '.png' in image_url.lower():
+                ext = '.png'
+            elif '.jpeg' in image_url.lower() or '.jpg' in image_url.lower():
+                ext = '.jpg'
+            
+            image_file = output_path / f"{idx:04d}{ext}"
+            
+            if download_image(image_url, str(image_file)):
+                print(f"  ✓ {idx:04d}: {seg['sentence_text'][:50]}...")
+            else:
+                print(f"  ✗ {idx:04d}: Failed to download image")
+        else:
+            print(f"  ⚠️  {idx:04d}: No image URL")
+    
+    print(f"✅ Saved {len(data['segments'])} segments to {output_dir}/")
+
 def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Fetch segments from Google Sheets')
+    parser.add_argument('--run-id', help='Specific run ID to fetch (defaults to latest)')
+    parser.add_argument('--output-dir', default='generated', help='Output directory for images/text')
+    parser.add_argument('--skip-video-files', action='store_true', help='Skip downloading images/text')
+    args = parser.parse_args()
+    
     load_dotenv()
     
     sheet_key = os.getenv('GOOGLE_SHEETS_KEY')
@@ -64,9 +121,7 @@ def main():
     if not sheet_key or not creds_path:
         sys.exit("❌ Missing GOOGLE_SHEETS_KEY or GOOGLE_SERVICE_ACCOUNT_JSON_PATH in .env")
     
-    run_id = sys.argv[1] if len(sys.argv) > 1 else None
-    
-    data = fetch_latest_segments(sheet_key, creds_path, run_id)
+    data = fetch_latest_segments(sheet_key, creds_path, args.run_id)
     
     if not data:
         sys.exit(1)
@@ -80,6 +135,10 @@ def main():
     
     print(f"✅ Written data to {output_path}")
     print(f"   Total duration: {sum(s['duration_sec'] for s in data['segments']):.1f} seconds")
+    
+    # Also save as images + text for video generation
+    if not args.skip_video_files:
+        save_segments_for_video(data, args.output_dir)
 
 if __name__ == '__main__':
     main()

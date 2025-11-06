@@ -1,0 +1,62 @@
+name: Generate Video
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["News Agent (politics)"]
+    types:
+      - completed
+
+jobs:
+  build-video:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          ffmpeg -version
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pillow
+
+      - name: Download images from segments
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
+          GOOGLE_SHEETS_KEY: ${{ secrets.GOOGLE_SHEETS_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON_PATH: credentials/service_account.json
+        run: |
+          mkdir -p credentials generated
+          echo "${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_B64 }}" | base64 --decode > credentials/service_account.json
+          python fetch_segments_for_video.py --output-dir generated
+
+      - name: Generate video
+        run: |
+          python video/make_video.py
+
+      - name: Upload video artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-video-${{ github.run_number }}
+          path: output/final.mp4
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload video info
+        run: |
+          ls -lh output/final.mp4
+          echo "✅ Video generated successfully!"
