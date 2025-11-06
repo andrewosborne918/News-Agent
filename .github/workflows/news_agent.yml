@@ -71,22 +71,39 @@ jobs:
           python fetch_segments_for_video.py --output-dir generated
           python video/make_video.py
 
-      - name: Generate caption
+      - name: Generate caption with AI
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python generate_caption.py generated
 
-      - name: Post to Buffer
-        env:
-          BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
-          RUN_ID: run-${{ github.run_id }}
-        run: |
-          python post_to_buffer.py output/final.mp4
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Upload video artifact
+      - name: Authenticate to Google Cloud
+        run: |
+          echo "${{ secrets.GCP_SA_KEY }}" > /tmp/gcp-key.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp-key.json
+
+      - name: Upload video to Google Cloud Storage
+        run: |
+          # Copy final video to generated folder with timestamp
+          TIMESTAMP=$(date +%s)
+          cp output/final.mp4 generated/news_video_${TIMESTAMP}.mp4
+          
+          # Upload to GCS (triggers Cloud Function automatically)
+          gsutil cp generated/news_video_${TIMESTAMP}.mp4 gs://${{ secrets.GCS_BUCKET }}/incoming/
+          
+          echo "✅ Video uploaded to GCS - Cloud Function will handle posting"
+          echo "Video: gs://${{ secrets.GCS_BUCKET }}/incoming/news_video_${TIMESTAMP}.mp4"
+
+      - name: Upload video artifact (backup)
         uses: actions/upload-artifact@v4
         with:
           name: news-video-${{ github.run_number }}
-          path: output/final.mp4
+          path: |
+            generated/news_video_*.mp4
+            generated/caption.json
           retention-days: 30
