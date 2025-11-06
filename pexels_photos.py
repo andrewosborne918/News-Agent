@@ -107,53 +107,65 @@ def search_pexels_photo(query: str, per_page: int = 30, orientation: str = "port
         return None
 
 
-def get_photo_for_question(question_text: str, answer_text: str = "", fallback_photo_url: str = "") -> str:
+def get_photo_for_answer(answer_text: str, article_text: str = "", fallback_photo_url: str = "") -> str:
     """
-    Get a Pexels photo URL relevant to the question and answer.
+    Get a Pexels photo URL relevant to the answer content.
+    
+    Priority order:
+    1. Keywords from the answer (most specific)
+    2. Keywords from the article (broader context)
+    3. Patriotic imagery (red, white, blue themed)
+    4. Previous question's photo (if available)
     
     Args:
-        question_text: The question being asked
-        answer_text: The answer text (optional, for more context)
+        answer_text: The answer text to find an image for
+        article_text: The full article text (for fallback context)
         fallback_photo_url: A photo URL from a previous question to use if nothing found
     
     Returns:
         Photo URL string, or empty string if none found
     """
-    # Combine question and answer for better keyword extraction
-    combined_text = f"{question_text} {answer_text}"
-    
-    # Extract keywords
-    keywords = extract_keywords_from_text(combined_text, max_keywords=3)
-    
-    # Search for photo
-    photo = search_pexels_photo(keywords, per_page=30, orientation="portrait")
-    
-    if photo:
-        return photo["url"]
-    
-    # Fallback 1: try with just the question
+    # Priority 1: Try to match the answer content
     if answer_text:
-        keywords = extract_keywords_from_text(question_text, max_keywords=2)
-        photo = search_pexels_photo(keywords, per_page=30, orientation="portrait")
-        if photo:
-            return photo["url"]
+        keywords = extract_keywords_from_text(answer_text, max_keywords=3)
+        if keywords and keywords != "news abstract":  # Skip if we got generic fallback
+            photo = search_pexels_photo(keywords, per_page=30, orientation="portrait")
+            if photo:
+                print(f"  ✅ Found photo matching answer keywords: '{keywords}'")
+                return photo["url"]
     
-    # Fallback 2: try broader news/politics topics
-    broader_topics = ["politics", "government", "news", "capitol building", "american flag"]
-    for topic in broader_topics:
+    # Priority 2: Try to match the article content
+    if article_text:
+        keywords = extract_keywords_from_text(article_text[:500], max_keywords=3)  # First 500 chars
+        if keywords and keywords != "news abstract":
+            photo = search_pexels_photo(keywords, per_page=30, orientation="portrait")
+            if photo:
+                print(f"  ℹ️ Found photo matching article keywords: '{keywords}'")
+                return photo["url"]
+    
+    # Priority 3: Patriotic/American imagery (red, white, blue theme)
+    patriotic_topics = [
+        "american flag",
+        "usa patriotic",
+        "red white blue",
+        "capitol building washington",
+        "statue of liberty",
+        "independence hall"
+    ]
+    for topic in patriotic_topics:
         photo = search_pexels_photo(topic, per_page=20, orientation="portrait")
         if photo:
-            print(f"  ℹ️ Using broader topic fallback: '{topic}'")
+            print(f"  🇺🇸 Using patriotic fallback: '{topic}'")
             return photo["url"]
     
-    # Fallback 3: use photo from previous question if available
+    # Priority 4: Use photo from previous question if available
     if fallback_photo_url:
-        print("  ℹ️ Using photo from previous question")
+        print("  ℹ️ Reusing photo from previous question")
         return fallback_photo_url
     
-    # Final fallback: generic abstract image
-    print("  ⚠️ Using final fallback: abstract pattern")
-    photo = search_pexels_photo("abstract pattern", per_page=20, orientation="portrait")
+    # Final fallback: generic abstract
+    print("  ⚠️ Using final fallback: abstract")
+    photo = search_pexels_photo("abstract blue red", per_page=20, orientation="portrait")
     return photo["url"] if photo else ""
 
 

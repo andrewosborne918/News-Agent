@@ -256,10 +256,10 @@ NEUTRAL_SYSTEM = (
     "Write sentences that flow naturally together in a video."
 )
 
-def get_photo_url_for_question(question_text: str, answer_text: str, question_id: str, fallback_url: str = "") -> str:
+def get_photo_url_for_answer(answer_text: str, article_text: str, question_id: str, fallback_url: str = "") -> str:
     """
-    Get a relevant stock photo from Pexels based on the question and answer.
-    Falls back to broader topics or previous photo if specific search fails.
+    Get a relevant stock photo from Pexels based on the answer content.
+    Priority: answer keywords -> article keywords -> patriotic imagery -> previous photo.
     """
     if pexels_photos is None:
         print("⚠️ pexels_photos module not available")
@@ -267,7 +267,7 @@ def get_photo_url_for_question(question_text: str, answer_text: str, question_id
     
     try:
         print(f"  📸 Finding stock photo for {question_id}...")
-        photo_url = pexels_photos.get_photo_for_question(question_text, answer_text, fallback_url)
+        photo_url = pexels_photos.get_photo_for_answer(answer_text, article_text, fallback_url)
         return photo_url
     except Exception as e:
         print(f"  ⚠️ Error fetching stock photo: {e}")
@@ -372,9 +372,9 @@ def main():
         answer = gemini_answer(qtext, article, conservative, model_name=args.model)
         sents = limit_sentences_length(to_sentences(answer), max_words=args.max_words, min_words=args.min_words)
         
-        # Get one stock photo URL per question (using the full answer for context)
-        # Pass the last successful photo as a fallback
-        image_url = get_photo_url_for_question(qtext, answer, qid, last_successful_photo)
+        # Get one stock photo URL based on answer content first, then article
+        # Priority: answer -> article -> patriotic imagery -> previous photo
+        image_url = get_photo_url_for_answer(answer, article, qid, last_successful_photo)
         
         # Track successful photos for fallback
         if image_url:
