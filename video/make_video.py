@@ -20,11 +20,13 @@ WORK_DIR    = Path("work")        # temp images with text baked in
 MUSIC_PATH  = Path("assets/music.mp3")
 FONT_PATH   = Path("assets/fonts/Inter-Regular.ttf")  # or None for default
 VIDEO_W, VIDEO_H = 1080, 1920     # Portrait mode (9:16 for TikTok/Reels/Shorts)
-DURATION_PER_SLIDE = 4            # seconds per image
+MIN_DURATION = 3                  # minimum seconds per slide
+MAX_DURATION = 10                 # maximum seconds per slide
+WORDS_PER_SECOND = 2.5            # average reading speed
 FADE_SEC = 0.5                    # fade duration at transitions
-FONT_SIZE = 140                   # much larger for readability
+FONT_SIZE = 350                   # very large for readability
 MARGIN = 100                      # padding for text safe area
-LINE_WIDTH = 20                   # wrap width (narrower for larger font)
+LINE_WIDTH = 12                   # wrap width (narrower for very large font)
 # ----------------------------------
 
 def ensure_dirs():
@@ -32,6 +34,14 @@ def ensure_dirs():
     OUTPUT_DIR.mkdir(exist_ok=True)
     WORK_DIR.mkdir(exist_ok=True)
     print(f"✓ Directories ready: {OUTPUT_DIR}, {WORK_DIR}")
+
+def calculate_duration(text):
+    """Calculate slide duration based on text length"""
+    word_count = len(text.split())
+    duration = word_count / WORDS_PER_SECOND
+    # Clamp between min and max
+    duration = max(MIN_DURATION, min(MAX_DURATION, duration))
+    return duration
 
 def load_font():
     """Load custom font or fallback to default"""
@@ -91,17 +101,22 @@ def put_text_on_image(img_path, txt_path, out_path):
     draw.multiline_text((x, y), wrapped, font=font, fill=(255, 255, 255, 255), spacing=20, align="center")
 
     canvas.save(out_path, quality=95)
-    print(f"  ✓ Rendered: {Path(img_path).name} -> {Path(out_path).name}")
+    
+    # Calculate duration based on text length
+    duration = calculate_duration(text)
+    print(f"  ✓ Rendered: {Path(img_path).name} -> {Path(out_path).name} ({duration:.1f}s)")
+    
+    return duration
 
-def build_concat_list(image_files):
-    """Create ffmpeg concat demuxer input file"""
+def build_concat_list(image_files_with_durations):
+    """Create ffmpeg concat demuxer input file with dynamic durations"""
     lst_path = WORK_DIR / "inputs.txt"
     with open(lst_path, "w", encoding="utf-8") as f:
-        for img in image_files:
+        for img, duration in image_files_with_durations:
             # Use just the filename since files are in work/ directory
             filename = Path(img).name
             f.write(f"file '{filename}'\n")
-            f.write(f"duration {DURATION_PER_SLIDE}\n")
+            f.write(f"duration {duration}\n")
         # ffmpeg concat requires last file repeated without duration
         if image_files:
             filename = Path(image_files[-1]).name
@@ -143,22 +158,22 @@ def main():
 
     # Render text on each image
     print("\n🖼️  Rendering captions on images...")
-    baked = []
+    baked_with_durations = []
     for img in images:
         stem = Path(img).stem
         txt = INPUT_DIR / f"{stem}.txt"
         out = WORK_DIR / f"{stem}_baked.jpg"
-        put_text_on_image(img, txt, out)
-        baked.append(str(out))
+        duration = put_text_on_image(img, txt, out)
+        baked_with_durations.append((str(out), duration))
 
-    concat_file = build_concat_list(baked)
+    concat_file = build_concat_list(baked_with_durations)
 
     video_no_audio = OUTPUT_DIR / "slideshow.mp4"
     final_video = OUTPUT_DIR / "final.mp4"
 
     # Build slideshow with fade transitions
-    print(f"\n🎬 Creating slideshow ({len(baked)} slides, {DURATION_PER_SLIDE}s each)...")
-    total_duration = len(baked) * DURATION_PER_SLIDE
+    total_duration = sum(d for _, d in baked_with_durations)
+    print(f"\n🎬 Creating slideshow ({len(baked_with_durations)} slides, {total_duration:.1f}s total)...")
     
     # Use absolute paths for output, relative path for inputs (which are in work/)
     abs_video_no_audio = video_no_audio.absolute()
