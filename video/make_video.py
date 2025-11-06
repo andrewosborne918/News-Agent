@@ -22,11 +22,15 @@ FONT_PATH   = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")  # Sy
 VIDEO_W, VIDEO_H = 1080, 1920     # Portrait mode (9:16 for TikTok/Reels/Shorts)
 MIN_DURATION = 3                  # minimum seconds per slide
 MAX_DURATION = 10                 # maximum seconds per slide
-WORDS_PER_SECOND = 2.5            # average reading speed
+WORDS_PER_SECOND = 2.5            # legacy (kept for reference)
+# Tuned reading speeds (slower for longer text)
+WPS_SHORT = 2.2    # <= 15 words
+WPS_MED   = 1.8    # 16-40 words
+WPS_LONG  = 1.3    # > 40 words
 FADE_SEC = 0.5                    # fade duration at transitions
 FONT_SIZE = 70                    # readable size
-MARGIN = 100                      # padding for text safe area
-LINE_WIDTH = 25                   # wrap width (adjusted for 70pt font)
+MARGIN = 120                      # padding for text safe area (left/right & top/bottom)
+LINE_WIDTH = 25                   # (unused for wrapping now; retained for backwards-compat)
 # ----------------------------------
 
 def ensure_dirs():
@@ -36,12 +40,72 @@ def ensure_dirs():
     print(f"✓ Directories ready: {OUTPUT_DIR}, {WORK_DIR}")
 
 def calculate_duration(text):
-    """Calculate slide duration based on text length"""
-    word_count = len(text.split())
-    duration = word_count / WORDS_PER_SECOND
+    """Calculate slide duration based on text length with slower speeds for long text."""
+    words = len(text.split())
+    if words <= 15:
+        wps = WPS_SHORT
+    elif words <= 40:
+        wps = WPS_MED
+    else:
+        wps = WPS_LONG
+    duration = words / max(0.1, wps)
+    # Slight extra buffer for very long captions
+    if words > 60:
+        duration *= 1.1
     # Clamp between min and max
-    duration = max(MIN_DURATION, min(MAX_DURATION, duration))
-    return duration
+    return max(MIN_DURATION, min(MAX_DURATION, duration))
+
+def _text_width(draw, font, s: str):
+    try:
+        return draw.textlength(s, font=font)
+    except Exception:
+        bbox = draw.textbbox((0, 0), s, font=font)
+        return bbox[2] - bbox[0]
+
+def wrap_text_to_width(text: str, draw: ImageDraw.ImageDraw, font: ImageFont.ImageFont, max_width: int):
+    """Wrap text by measuring pixel width so no line exceeds max_width.
+    Splits overlong words as a last resort to avoid overflow.
+    """
+    words = text.split()
+    lines = []
+    cur = ""
+    space = " "
+
+    def flush():
+        nonlocal cur
+        if cur:
+            lines.append(cur)
+            cur = ""
+
+    for w in words:
+        trial = (cur + space + w).strip()
+        if cur and _text_width(draw, font, trial) <= max_width:
+            cur = trial
+        elif not cur and _text_width(draw, font, w) <= max_width:
+            cur = w
+        else:
+            # If current line has content, flush it first
+            if cur:
+                flush()
+            # Handle very long single word by splitting
+            if _text_width(draw, font, w) <= max_width:
+                cur = w
+            else:
+                piece = ""
+                for ch in w:
+                    t2 = piece + ch
+                    if _text_width(draw, font, t2) <= max_width:
+                        piece = t2
+                    else:
+                        if piece:
+                            lines.append(piece)
+                        piece = ch
+                if piece:
+                    cur = piece
+                else:
+                    cur = ""
+    flush()
+    return lines
 
 def load_font():
     """Load custom font or fallback to default"""
@@ -91,20 +155,33 @@ def put_text_on_image(img_path, txt_path, out_path):
     # Load and wrap text
     text = Path(txt_path).read_text(encoding="utf-8").strip() if Path(txt_path).exists() else ""
     font = load_font()
-    wrapped = textwrap.fill(text, width=LINE_WIDTH)
-    
-    # Calculate text position (centered both horizontally and vertically)
-    bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=20)
-    text_w = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
-    
-    x = (VIDEO_W - text_w) // 2
+    # Pixel-aware wrapping within safe margins and centered vertically
+    max_text_width = VIDEO_W - 2 * MARGIN
+    lines = wrap_text_to_width(text, draw, font, max_text_width) if text else []
+
+    # Compute total text block height
+    line_heights = []
+    max_w = 0
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        line_heights.append(h)
+        max_w = max(max_w, w)
+    spacing = 20
+    text_h = sum(line_heights) + spacing * (max(0, len(lines) - 1))
     y = (VIDEO_H - text_h) // 2
-    
-    # Draw drop shadow for better readability
-    draw.multiline_text((x+4, y+4), wrapped, font=font, fill=(0, 0, 0, 255), spacing=20, align="center")
-    # Draw main text
-    draw.multiline_text((x, y), wrapped, font=font, fill=(255, 255, 255, 255), spacing=20, align="center")
+
+    # Draw each line centered horizontally; margins ensure no clipping
+    for i, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w = bbox[2] - bbox[0]
+        x = max(MARGIN, (VIDEO_W - w) // 2)
+        # Drop shadow
+        draw.text((x+4, y+4), line, font=font, fill=(0, 0, 0, 255))
+        # Main text
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+        y += line_heights[i] + spacing
 
     canvas.save(out_path, quality=95)
     
