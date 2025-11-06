@@ -1,0 +1,52 @@
+name: News Agent (politics)
+
+on:
+  schedule:
+    # UTC times: 14,17,20,23,02 ≈ 9a/12p/3p/6p/9p America/Detroit
+    - cron: "0 2,14,17,20,23 * * *"
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Debug - List files
+        run: |
+          echo "Current directory:"
+          pwd
+          echo "Files in current directory:"
+          ls -la
+          echo "Checking for news_picker.py:"
+          test -f news_picker.py && echo "news_picker.py EXISTS" || echo "news_picker.py MISSING"
+
+      - name: Restore Google service account JSON
+        run: |
+          mkdir -p credentials
+          echo "${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_B64 }}" | base64 --decode > credentials/service_account.json
+          python -m json.tool credentials/service_account.json > /dev/null || (echo "Invalid JSON" && exit 1)
+
+      - name: Run generator (auto politics)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
+          GOOGLE_SHEETS_KEY: ${{ secrets.GOOGLE_SHEETS_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON_PATH: credentials/service_account.json
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: |
+          python generate_segments.py --auto --country us --topic politics --duration 4.0 --model "gemini-2.5-flash" --max-words 15 --min-words 10
