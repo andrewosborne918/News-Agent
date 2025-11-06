@@ -256,10 +256,55 @@ NEUTRAL_SYSTEM = (
     "Write sentences that flow naturally together in a video."
 )
 
-def get_photo_url_for_answer(answer_text: str, article_text: str, question_id: str, fallback_url: str = "") -> str:
+def suggest_photo_search_terms(answer_text: str, article_text: str, model_name: str) -> str:
+    """
+    Use Gemini AI to suggest appropriate photo search terms based on the answer and article content.
+    Returns a 2-4 word search phrase for stock photos.
+    """
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        # Fallback to simple keyword extraction
+        return ""
+    
+    try:
+        genai.configure(api_key=key)
+        prompt = f"""Based on this news answer and article context, suggest 2-4 words for searching stock photos that would visually represent the content.
+
+Answer: {answer_text[:300]}
+
+Article Context: {article_text[:500]}
+
+Requirements:
+- Use concrete, visual subjects (people, places, objects, symbols)
+- Match the tone (serious, political, economic, etc.)
+- Avoid abstract concepts
+- Be specific but photographable
+- Examples: "government building washington", "financial district stocks", "protest crowd capitol", "military personnel uniform"
+
+Photo search terms (2-4 words only):"""
+        
+        model = genai.GenerativeModel(model_name)
+        resp = model.generate_content(prompt)
+        suggestion = (resp.text or "").strip().strip('"').strip("'")
+        
+        # Clean up the response - take only first line and limit words
+        suggestion = suggestion.split('\n')[0].strip()
+        words = suggestion.split()[:4]  # Max 4 words
+        suggestion = " ".join(words)
+        
+        if suggestion and len(suggestion) > 3:
+            print(f"  🤖 AI suggested photo search: '{suggestion}'")
+            return suggestion
+        
+        return ""
+    except Exception as e:
+        print(f"  ⚠️ AI photo suggestion failed: {e}")
+        return ""
+
+def get_photo_url_for_answer(answer_text: str, article_text: str, question_id: str, model_name: str, fallback_url: str = "") -> str:
     """
     Get a relevant stock photo from Pexels based on the answer content.
-    Priority: answer keywords -> article keywords -> patriotic imagery -> previous photo.
+    Uses AI to suggest appropriate search terms, then falls back to keyword extraction.
     """
     if pexels_photos is None:
         print("⚠️ pexels_photos module not available")
@@ -267,6 +312,16 @@ def get_photo_url_for_answer(answer_text: str, article_text: str, question_id: s
     
     try:
         print(f"  📸 Finding stock photo for {question_id}...")
+        
+        # First, try AI-suggested search terms
+        ai_suggestion = suggest_photo_search_terms(answer_text, article_text, model_name)
+        if ai_suggestion:
+            photo = pexels_photos.search_pexels_photo(ai_suggestion, per_page=30, orientation="portrait")
+            if photo:
+                print(f"  ✅ Using AI-suggested photo")
+                return photo["url"]
+        
+        # Fallback to keyword extraction method
         photo_url = pexels_photos.get_photo_for_answer(answer_text, article_text, fallback_url)
         return photo_url
     except Exception as e:
@@ -372,9 +427,9 @@ def main():
         answer = gemini_answer(qtext, article, conservative, model_name=args.model)
         sents = limit_sentences_length(to_sentences(answer), max_words=args.max_words, min_words=args.min_words)
         
-        # Get one stock photo URL based on answer content first, then article
-        # Priority: answer -> article -> patriotic imagery -> previous photo
-        image_url = get_photo_url_for_answer(answer, article, qid, last_successful_photo)
+        # Get one stock photo URL using AI-suggested terms first
+        # Priority: AI suggestion -> answer keywords -> article keywords -> patriotic -> previous photo
+        image_url = get_photo_url_for_answer(answer, article, qid, args.model, last_successful_photo)
         
         # Track successful photos for fallback
         if image_url:
