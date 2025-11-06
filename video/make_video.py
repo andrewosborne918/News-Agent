@@ -124,8 +124,8 @@ def build_concat_list(image_files_with_durations):
             f.write(f"file '{filename}'\n")
             f.write(f"duration {duration}\n")
         # ffmpeg concat requires last file repeated without duration
-        if image_files:
-            filename = Path(image_files[-1]).name
+        if image_files_with_durations:
+            filename = Path(image_files_with_durations[-1][0]).name
             f.write(f"file '{filename}'\n")
     print(f"✓ Created concat list: {lst_path}")
     return lst_path
