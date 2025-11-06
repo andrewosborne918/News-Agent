@@ -184,14 +184,10 @@ def main():
     # Use absolute paths for output, relative path for inputs (which are in work/)
     abs_video_no_audio = video_no_audio.absolute()
     
-    # Ken Burns effect: subtle zoom from 1.0x to 1.1x scale over the video duration
-    # zoompan parameters: z='zoom level', d='duration in frames', s='output size'
-    zoom_effect = f"zoompan=z='min(zoom+0.0015,1.1)':d=1:s={VIDEO_W}x{VIDEO_H}"
-    
     run_ffmpeg([
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0", "-i", "inputs.txt",
-        "-vf", f"{zoom_effect},format=yuv420p,fade=t=in:st=0:d={FADE_SEC},fade=t=out:st={total_duration-FADE_SEC}:d={FADE_SEC}",
+        "-vf", f"format=yuv420p,fade=t=in:st=0:d={FADE_SEC},fade=t=out:st={total_duration-FADE_SEC}:d={FADE_SEC}",
         "-r", "30",
         "-pix_fmt", "yuv420p",
         "-c:v", "libx264",
