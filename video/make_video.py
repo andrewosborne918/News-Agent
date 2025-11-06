@@ -22,9 +22,9 @@ FONT_PATH   = Path("assets/fonts/Inter-Regular.ttf")  # or None for default
 VIDEO_W, VIDEO_H = 1080, 1920     # Portrait mode (9:16 for TikTok/Reels/Shorts)
 DURATION_PER_SLIDE = 4            # seconds per image
 FADE_SEC = 0.5                    # fade duration at transitions
-FONT_SIZE = 72                    # larger for portrait
-MARGIN = 80                       # padding for text safe area
-LINE_WIDTH = 25                   # wrap width (narrower for portrait)
+FONT_SIZE = 140                   # much larger for readability
+MARGIN = 100                      # padding for text safe area
+LINE_WIDTH = 20                   # wrap width (narrower for larger font)
 # ----------------------------------
 
 def ensure_dirs():
@@ -68,28 +68,27 @@ def put_text_on_image(img_path, txt_path, out_path):
     else:
         canvas = im.resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
 
-    # Draw translucent bar at bottom for text readability
+    # Draw semi-transparent overlay for text readability
     draw = ImageDraw.Draw(canvas, "RGBA")
-    bar_h = int(VIDEO_H * 0.35)  # Taller bar for portrait
-    draw.rectangle([0, VIDEO_H - bar_h, VIDEO_W, VIDEO_H], fill=(0, 0, 0, 180))
+    draw.rectangle([0, 0, VIDEO_W, VIDEO_H], fill=(0, 0, 0, 140))
 
     # Load and wrap text
     text = Path(txt_path).read_text(encoding="utf-8").strip() if Path(txt_path).exists() else ""
     font = load_font()
     wrapped = textwrap.fill(text, width=LINE_WIDTH)
     
-    # Calculate text position (centered horizontally, bottom area vertically)
-    bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=10)
+    # Calculate text position (centered both horizontally and vertically)
+    bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=20)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
     
-    x = max(MARGIN, (VIDEO_W - text_w) // 2)
-    y = VIDEO_H - MARGIN - text_h - 40
+    x = (VIDEO_W - text_w) // 2
+    y = (VIDEO_H - text_h) // 2
     
     # Draw drop shadow for better readability
-    draw.multiline_text((x+3, y+3), wrapped, font=font, fill=(0, 0, 0, 255), spacing=10, align="center")
+    draw.multiline_text((x+4, y+4), wrapped, font=font, fill=(0, 0, 0, 255), spacing=20, align="center")
     # Draw main text
-    draw.multiline_text((x, y), wrapped, font=font, fill=(255, 255, 255, 255), spacing=10, align="center")
+    draw.multiline_text((x, y), wrapped, font=font, fill=(255, 255, 255, 255), spacing=20, align="center")
 
     canvas.save(out_path, quality=95)
     print(f"  ✓ Rendered: {Path(img_path).name} -> {Path(out_path).name}")
