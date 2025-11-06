@@ -34,12 +34,25 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 
+import time, random
+
+def with_retry(call, retries=6, base=0.6):
+    for attempt in range(retries):
+        try:
+            return call()
+        except Exception as e:
+            if attempt == retries - 1:
+                raise
+            delay = base * (2 ** attempt) + random.uniform(0, 0.25)
+            print(f"  ⏳ Transient error, retrying in {delay:.2f}s (attempt {attempt+1}/{retries}) - {e}")
+            time.sleep(delay)
+
 try:
     print("🔗 Authorizing with service account…")
-    gc = gspread.service_account(filename=CREDS_PATH)
+    gc = with_retry(lambda: gspread.service_account(filename=CREDS_PATH))
     print("🔗 Opening spreadsheet by key:", SHEET_KEY)
-    sh = gc.open_by_key(SHEET_KEY)
-    titles = [ws.title for ws in sh.worksheets()]
+    sh = with_retry(lambda: gc.open_by_key(SHEET_KEY))
+    titles = with_retry(lambda: [ws.title for ws in sh.worksheets()])
     print("📄 Worksheets found:", titles)
 
     # Ensure required tabs exist
@@ -49,8 +62,8 @@ try:
         die(f"Missing required tab(s): {', '.join(sorted(missing))}")
 
     # Read Questions
-    ws_q = sh.worksheet("Questions")
-    rows = ws_q.get_all_records()
+    ws_q = with_retry(lambda: sh.worksheet("Questions"))
+    rows = with_retry(lambda: ws_q.get_all_records())
     active = [(r["question_id"], r["question_text"]) for r in rows if str(r.get("enabled","TRUE")).upper() == "TRUE"]
     print("✅ Active questions:")
     for qid, qtext in active:
