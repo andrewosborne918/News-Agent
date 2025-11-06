@@ -256,10 +256,10 @@ NEUTRAL_SYSTEM = (
     "Write sentences that flow naturally together in a video."
 )
 
-def get_photo_url_for_question(question_text: str, answer_text: str, question_id: str) -> str:
+def get_photo_url_for_question(question_text: str, answer_text: str, question_id: str, fallback_url: str = "") -> str:
     """
     Get a relevant stock photo from Pexels based on the question and answer.
-    Falls back to a generic image if Pexels is unavailable.
+    Falls back to broader topics or previous photo if specific search fails.
     """
     if pexels_photos is None:
         print("⚠️ pexels_photos module not available")
@@ -267,11 +267,11 @@ def get_photo_url_for_question(question_text: str, answer_text: str, question_id
     
     try:
         print(f"  📸 Finding stock photo for {question_id}...")
-        photo_url = pexels_photos.get_photo_for_question(question_text, answer_text)
+        photo_url = pexels_photos.get_photo_for_question(question_text, answer_text, fallback_url)
         return photo_url
     except Exception as e:
         print(f"  ⚠️ Error fetching stock photo: {e}")
-        return ""
+        return fallback_url if fallback_url else ""
 
 def gemini_answer(question: str, article: str, conservative: bool, model_name: str) -> str:
     key = os.getenv("GEMINI_API_KEY")
@@ -365,13 +365,20 @@ def main():
     # Generate answers -> sentences -> rows
     run_id = now_run_id()
     rows_to_append = []
+    last_successful_photo = ""  # Track last successful photo for fallback
+    
     for qid, qtext in questions:
         conservative = (qid == "conservative_angle") or ("conservative" in qid.lower())
         answer = gemini_answer(qtext, article, conservative, model_name=args.model)
         sents = limit_sentences_length(to_sentences(answer), max_words=args.max_words, min_words=args.min_words)
         
         # Get one stock photo URL per question (using the full answer for context)
-        image_url = get_photo_url_for_question(qtext, answer, qid)
+        # Pass the last successful photo as a fallback
+        image_url = get_photo_url_for_question(qtext, answer, qid, last_successful_photo)
+        
+        # Track successful photos for fallback
+        if image_url:
+            last_successful_photo = image_url
         
         for idx, sent in enumerate(sents):
             # Use the same image URL for all segments of this question

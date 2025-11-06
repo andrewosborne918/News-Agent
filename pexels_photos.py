@@ -107,13 +107,14 @@ def search_pexels_photo(query: str, per_page: int = 30, orientation: str = "port
         return None
 
 
-def get_photo_for_question(question_text: str, answer_text: str = "") -> str:
+def get_photo_for_question(question_text: str, answer_text: str = "", fallback_photo_url: str = "") -> str:
     """
     Get a Pexels photo URL relevant to the question and answer.
     
     Args:
         question_text: The question being asked
         answer_text: The answer text (optional, for more context)
+        fallback_photo_url: A photo URL from a previous question to use if nothing found
     
     Returns:
         Photo URL string, or empty string if none found
@@ -130,15 +131,28 @@ def get_photo_for_question(question_text: str, answer_text: str = "") -> str:
     if photo:
         return photo["url"]
     
-    # Fallback: try with just the question
+    # Fallback 1: try with just the question
     if answer_text:
         keywords = extract_keywords_from_text(question_text, max_keywords=2)
         photo = search_pexels_photo(keywords, per_page=30, orientation="portrait")
         if photo:
             return photo["url"]
     
-    # Final fallback: generic news/abstract image
-    print("  ⚠️ Using fallback generic search")
+    # Fallback 2: try broader news/politics topics
+    broader_topics = ["politics", "government", "news", "capitol building", "american flag"]
+    for topic in broader_topics:
+        photo = search_pexels_photo(topic, per_page=20, orientation="portrait")
+        if photo:
+            print(f"  ℹ️ Using broader topic fallback: '{topic}'")
+            return photo["url"]
+    
+    # Fallback 3: use photo from previous question if available
+    if fallback_photo_url:
+        print("  ℹ️ Using photo from previous question")
+        return fallback_photo_url
+    
+    # Final fallback: generic abstract image
+    print("  ⚠️ Using final fallback: abstract pattern")
     photo = search_pexels_photo("abstract pattern", per_page=20, orientation="portrait")
     return photo["url"] if photo else ""
 
