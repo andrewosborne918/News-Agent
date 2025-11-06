@@ -99,24 +99,29 @@ def build_concat_list(image_files):
     lst_path = WORK_DIR / "inputs.txt"
     with open(lst_path, "w", encoding="utf-8") as f:
         for img in image_files:
-            f.write(f"file '{img}'\n")
+            # Use just the filename since files are in work/ directory
+            filename = Path(img).name
+            f.write(f"file '{filename}'\n")
             f.write(f"duration {DURATION_PER_SLIDE}\n")
         # ffmpeg concat requires last file repeated without duration
         if image_files:
-            f.write(f"file '{image_files[-1]}'\n")
+            filename = Path(image_files[-1]).name
+            f.write(f"file '{filename}'\n")
     print(f"✓ Created concat list: {lst_path}")
     return lst_path
 
-def run_ffmpeg(cmd):
+def run_ffmpeg(cmd, cwd=None):
     """Execute ffmpeg command"""
     print(f"🎬 Running ffmpeg...")
     print(f"   Command: {' '.join(cmd[:5])}...")
+    if cwd:
+        print(f"   Working dir: {cwd}")
     try:
-        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=cwd)
         print("   ✓ ffmpeg completed")
     except subprocess.CalledProcessError as e:
         # Capture stderr to see what went wrong
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
         print(f"❌ ffmpeg failed with exit code {result.returncode}")
         print(f"Error output:\n{result.stderr}")
         raise
@@ -155,17 +160,21 @@ def main():
     # Build slideshow with fade transitions
     print(f"\n🎬 Creating slideshow ({len(baked)} slides, {DURATION_PER_SLIDE}s each)...")
     total_duration = len(baked) * DURATION_PER_SLIDE
+    
+    # Use absolute paths for output, relative path for inputs (which are in work/)
+    abs_video_no_audio = video_no_audio.absolute()
+    
     run_ffmpeg([
         "ffmpeg", "-y",
-        "-f", "concat", "-safe", "0", "-i", str(concat_file),
+        "-f", "concat", "-safe", "0", "-i", "inputs.txt",
         "-vf", f"format=yuv420p,fade=t=in:st=0:d={FADE_SEC},fade=t=out:st={total_duration-FADE_SEC}:d={FADE_SEC}",
         "-r", "30",
         "-pix_fmt", "yuv420p",
         "-c:v", "libx264",
         "-preset", "medium",
         "-crf", "23",
-        str(video_no_audio)
-    ])
+        str(abs_video_no_audio)
+    ], cwd=WORK_DIR)
 
     # Mix in music if available
     if MUSIC_PATH.exists():
