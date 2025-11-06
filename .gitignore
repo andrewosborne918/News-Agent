@@ -56,6 +56,7 @@ output/
 *.mp4
 *.mp3
 assets/music.mp3
+assets/.music_index
 assets/fonts/*.ttf
 !assets/fonts/.gitkeep
 .AppleDouble

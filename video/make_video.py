@@ -10,6 +10,7 @@ import os
 import textwrap
 import subprocess
 import glob
+import random
 from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from pathlib import Path
 INPUT_DIR   = Path("generated")
 OUTPUT_DIR  = Path("output")
 WORK_DIR    = Path("work")        # temp images with text baked in
-MUSIC_PATH  = Path("assets/music.mp3")
+MUSIC_DIR   = Path("assets")      # Directory containing background music MP3s
 FONT_PATH   = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")  # System font
 VIDEO_W, VIDEO_H = 1080, 1920     # Portrait mode (9:16 for TikTok/Reels/Shorts)
 MIN_DURATION = 3                  # minimum seconds per slide
@@ -284,21 +285,54 @@ def main():
     ], cwd=WORK_DIR)
 
     # Mix in music if available
-    if MUSIC_PATH.exists():
-        print(f"\n🎵 Adding background music: {MUSIC_PATH}")
+    music_files = sorted(MUSIC_DIR.glob("*.mp3"))  # Sort alphabetically for consistent ordering
+    
+    if music_files:
+        # Use music files in order, cycling through them
+        # Create a state file to track which track to use next
+        state_file = MUSIC_DIR / ".music_index"
+        
+        # Read current index or start at 0
+        if state_file.exists():
+            try:
+                current_index = int(state_file.read_text().strip())
+            except (ValueError, FileNotFoundError):
+                current_index = 0
+        else:
+            current_index = 0
+        
+        # Select the current track and advance to next
+        selected_music = music_files[current_index % len(music_files)]
+        next_index = (current_index + 1) % len(music_files)
+        
+        # Save the next index for next time
+        state_file.write_text(str(next_index))
+        
+        print(f"\n🎵 Adding background music: {selected_music.name}")
+        print(f"   (Track {current_index + 1} of {len(music_files)}, cycling through all tracks)")
+        
+        # Calculate fade durations (2 seconds fade in/out)
+        fade_duration = 2.0
+        
+        # Add music with fade in/out, trimmed to video length
         run_ffmpeg([
             "ffmpeg", "-y",
-            "-stream_loop", "-1", "-i", str(MUSIC_PATH),
             "-i", str(video_no_audio),
-            "-shortest",
+            "-i", str(selected_music),
+            "-filter_complex",
+            f"[1:a]afade=t=in:st=0:d={fade_duration},afade=t=out:st={total_duration - fade_duration}:d={fade_duration},volume=0.3[music];[music]atrim=0:{total_duration}[music_trimmed]",
+            "-map", "0:v",
+            "-map", "[music_trimmed]",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k",
-            "-map", "0:a", "-map", "1:v",
+            "-shortest",
             str(final_video)
         ])
         print(f"✅ Video with music: {final_video}")
+        print(f"   ♪ Fade in/out: {fade_duration}s")
+        print(f"   ♪ Volume: 30% (0.3)")
     else:
-        print("⚠️  No music file found, skipping audio")
+        print(f"⚠️  No MP3 files found in {MUSIC_DIR}, skipping audio")
         os.replace(video_no_audio, final_video)
         print(f"✅ Video (no audio): {final_video}")
 
