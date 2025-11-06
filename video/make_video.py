@@ -111,8 +111,15 @@ def run_ffmpeg(cmd):
     """Execute ffmpeg command"""
     print(f"🎬 Running ffmpeg...")
     print(f"   Command: {' '.join(cmd[:5])}...")
-    subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    print("   ✓ ffmpeg completed")
+    try:
+        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        print("   ✓ ffmpeg completed")
+    except subprocess.CalledProcessError as e:
+        # Capture stderr to see what went wrong
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        print(f"❌ ffmpeg failed with exit code {result.returncode}")
+        print(f"Error output:\n{result.stderr}")
+        raise
 
 def main():
     print("="*60)
