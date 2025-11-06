@@ -18,7 +18,7 @@ INPUT_DIR   = Path("generated")
 OUTPUT_DIR  = Path("output")
 WORK_DIR    = Path("work")        # temp images with text baked in
 MUSIC_PATH  = Path("assets/music.mp3")
-FONT_PATH   = Path("assets/fonts/Inter-Regular.ttf")  # or None for default
+FONT_PATH   = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")  # System font
 VIDEO_W, VIDEO_H = 1080, 1920     # Portrait mode (9:16 for TikTok/Reels/Shorts)
 MIN_DURATION = 3                  # minimum seconds per slide
 MAX_DURATION = 10                 # maximum seconds per slide
@@ -187,7 +187,7 @@ def main():
     run_ffmpeg([
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0", "-i", "inputs.txt",
-        "-vf", f"format=yuv420p,fade=t=in:st=0:d={FADE_SEC},fade=t=out:st={total_duration-FADE_SEC}:d={FADE_SEC}",
+        "-vf", "format=yuv420p",
         "-r", "30",
         "-pix_fmt", "yuv420p",
         "-c:v", "libx264",
