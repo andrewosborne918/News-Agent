@@ -24,9 +24,9 @@ MIN_DURATION = 3                  # minimum seconds per slide
 MAX_DURATION = 10                 # maximum seconds per slide
 WORDS_PER_SECOND = 2.5            # average reading speed
 FADE_SEC = 0.5                    # fade duration at transitions
-FONT_SIZE = 100                   # readable size
+FONT_SIZE = 70                    # readable size
 MARGIN = 100                      # padding for text safe area
-LINE_WIDTH = 20                   # wrap width (adjusted for 100pt font)
+LINE_WIDTH = 25                   # wrap width (adjusted for 70pt font)
 # ----------------------------------
 
 def ensure_dirs():
