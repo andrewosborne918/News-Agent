@@ -77,15 +77,26 @@ jobs:
         run: |
           python generate_caption.py generated
 
+      # Authenticate first so subsequent CLI setup and commands pick up creds
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
       - name: Setup Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Verify GCP auth and bucket access (preflight)
+        env:
+          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+        run: |
+          echo "Active gcloud account:"
+          gcloud auth list --filter=status:ACTIVE
+          echo "Current project: $(gcloud config get-value project 2>/dev/null)"
+          echo "Listing bucket metadata (if accessible): gs://$GCS_BUCKET"
+          gcloud storage ls -b gs://$GCS_BUCKET || echo "Note: Could not list bucket metadata; continuing to upload step"
 
       - name: Upload video to Google Cloud Storage
         run: |
@@ -94,7 +105,8 @@ jobs:
           cp output/final.mp4 generated/news_video_${TIMESTAMP}.mp4
           
           # Upload to GCS (triggers Cloud Function automatically)
-          gsutil cp generated/news_video_${TIMESTAMP}.mp4 gs://${{ secrets.GCS_BUCKET }}/incoming/
+          # Use gcloud storage (recommended with github-actions/auth) instead of gsutil
+          gcloud storage cp generated/news_video_${TIMESTAMP}.mp4 gs://${{ secrets.GCS_BUCKET }}/incoming/
           
           echo "✅ Video uploaded to GCS - Cloud Function will handle posting"
           echo "Video: gs://${{ secrets.GCS_BUCKET }}/incoming/news_video_${TIMESTAMP}.mp4"
