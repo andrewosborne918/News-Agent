@@ -278,18 +278,27 @@ def gcs_to_social(event, context):
     try:
         # Download video from GCS
         local_path = _download_from_gcs(bucket, blob_name)
-        
+
         # Derive metadata
         title, description, tags = _derive_metadata(bucket, blob_name)
-        
+
         print(f"\nMetadata:")
         print(f"  Title: {title}")
         print(f"  Description: {description[:100]}...")
         print(f"  Tags: {tags}")
-        
-        # Upload to YouTube
+
+        # Upload to YouTube (gracefully handle upload limit exceeded)
         print("\n" + "-"*60)
-        yt_video_id = _upload_youtube(local_path, title, description, tags)
+        yt_video_id = None
+        try:
+            yt_video_id = _upload_youtube(local_path, title, description, tags)
+        except Exception as yt_err:
+            err_text = str(yt_err)
+            if "uploadLimitExceeded" in err_text or "exceeded the number of videos" in err_text:
+                print("⚠️ YouTube daily upload limit exceeded; skipping YouTube but proceeding to Facebook.")
+            else:
+                print(f"YouTube upload error: {yt_err}")
+                # Still proceed to Facebook attempt
 
         # Optionally upload to Facebook if secrets are present
         fb_video_id = None
