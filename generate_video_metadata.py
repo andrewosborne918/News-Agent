@@ -14,40 +14,30 @@ if not ts:
   sys.exit(1)
 
 caption_file = pathlib.Path("generated/caption.json")
-caption = caption_file.read_text(encoding="utf-8") if caption_file.exists() else ""
-raw = caption.strip()
-text = re.sub(r"\s+", " ", raw)
 
-# Extract first sentence or first N words
-sentence_match = re.match(r"(.+?[.!?])\s", text + " ")
-base_sentence = sentence_match.group(1) if sentence_match else text
-words = base_sentence.split()
-
-# Limit words
-words = words[:16]
-candidate = " ".join(words)
-
-# Clean trailing punctuation
-candidate = candidate.strip().rstrip(string.punctuation)
-
-# Title casing with minor words preserved lowercase (unless first)
-minor = {"a","an","and","or","but","for","nor","on","at","to","from","by","of","in","with","the"}
-def smart_title(s: str) -> str:
-  parts = s.split()
-  out = []
-  for i,p in enumerate(parts):
-    lower = p.lower()
-    if i != 0 and lower in minor:
-      out.append(lower)
-    else:
-      out.append(p[:1].upper() + p[1:])
-  return " ".join(out)
-
-title = smart_title(candidate) or "Daily Politics Update"
-title = title[:70]
-
-description = (text or title)[:4800]
-tags = ["news", "politics", "shorts", "breaking", "daily update"]
+# Try to parse as JSON first (from generate_caption.py)
+if caption_file.exists():
+    try:
+        caption_data = json.loads(caption_file.read_text(encoding="utf-8"))
+        # Use the AI-generated title, description, and hashtags
+        title = caption_data.get("title", "Daily Politics Update")[:70]
+        description = caption_data.get("description", "")[:4800]
+        # Convert hashtags to tags (remove # symbol)
+        hashtags = caption_data.get("hashtags", [])
+        tags = [tag.lstrip('#') for tag in hashtags] if hashtags else ["news", "politics", "shorts", "breaking"]
+    except (json.JSONDecodeError, KeyError):
+        # Fallback: treat as plain text
+        caption = caption_file.read_text(encoding="utf-8")
+        raw = caption.strip()
+        text = re.sub(r"\s+", " ", raw)
+        title = text[:70] or "Daily Politics Update"
+        description = text[:4800]
+        tags = ["news", "politics", "shorts", "breaking", "daily update"]
+else:
+    # No caption file - use defaults
+    title = "Daily Politics Update"
+    description = "Stay informed with our daily news shorts."
+    tags = ["news", "politics", "shorts", "breaking", "daily update"]
 
 out = {"title": title, "description": description, "tags": tags}
 out_path = pathlib.Path(f"generated/news_video_{ts}.json")
