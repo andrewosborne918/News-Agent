@@ -295,7 +295,7 @@ def main():
             idx = random.randint(0, len(music_files) - 1)
             print(f"\nNo GITHUB_RUN_NUMBER; random music index -> {idx}")
         selected_music = music_files[idx]
-        print(f"\n\ud83c\udfb5 Adding background music: {selected_music.name} (track {idx+1}/{len(music_files)})")
+        print(f"\nAdding background music: {selected_music.name} (track {idx+1}/{len(music_files)})")
         
         # Calculate fade durations (2 seconds fade in/out)
         fade_duration = 2.0
