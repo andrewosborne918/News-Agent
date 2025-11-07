@@ -17,6 +17,7 @@ from google.api_core.exceptions import NotFound
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from googleapiclient.errors import HttpError, ResumableUploadError
 import requests
 
 # Get project ID from environment (auto-injected by Cloud Functions)
@@ -110,7 +111,11 @@ def _download_from_gcs(bucket_name: str, blob_name: str) -> str:
     return tmp
 
 def _upload_youtube(filepath: str, title: str, description: str, tags: list) -> str:
-    """Upload video to YouTube as a Short"""
+    """Upload video to YouTube as a Short
+    
+    Raises:
+        Exception: For upload limit exceeded or other YouTube API errors
+    """
     print(f"Uploading to YouTube: {title}")
     
     # Create credentials from refresh token
@@ -154,17 +159,29 @@ def _upload_youtube(filepath: str, title: str, description: str, tags: list) -> 
         media_body=media
     )
     
-    # Execute resumable upload
-    response = None
-    while response is None:
-        status, response = request.next_chunk()
-        if status:
-            print(f"Upload {int(status.progress() * 100)}% complete")
-    
-    video_id = response.get("id")
-    print(f"✅ YouTube upload complete: https://youtube.com/shorts/{video_id}")
-    
-    return video_id
+    # Execute resumable upload with error handling
+    try:
+        response = None
+        while response is None:
+            status, response = request.next_chunk()
+            if status:
+                print(f"Upload {int(status.progress() * 100)}% complete")
+        
+        video_id = response.get("id")
+        print(f"✅ YouTube upload complete: https://youtube.com/shorts/{video_id}")
+        
+        return video_id
+        
+    except (HttpError, ResumableUploadError) as e:
+        error_str = str(e)
+        # Check for upload limit exceeded
+        if 'uploadLimitExceeded' in error_str or 'exceeded the number of videos' in error_str:
+            print(f"⚠️ YouTube upload limit exceeded. Channel needs verification or has hit daily quota.")
+            print(f"   Error details: {error_str}")
+            raise Exception("YouTube upload limit exceeded") from e
+        else:
+            print(f"❌ YouTube API error: {error_str}")
+            raise
 
 def _upload_facebook(filepath: str, title: str, description: str) -> str:
     """Upload video to Facebook Page"""
@@ -219,15 +236,24 @@ def _upload_facebook(filepath: str, title: str, description: str) -> str:
 def _facebook_preflight(token: str) -> dict:
     """Validate Facebook token and permissions; return dict with status info."""
     base = "https://graph.facebook.com/v19.0"
-    info = {"token_valid": False, "missing_perms": [], "perms": []}
+    info = {"token_valid": False, "missing_perms": [], "perms": [], "error": None}
     try:
+        # First check if token works at all
         me = requests.get(f"{base}/me", params={"access_token": token}, timeout=15)
         if me.ok:
             info["token_valid"] = True
         else:
             print(f"FB preflight /me failed: {me.status_code}")
-            try: print(me.json())
-            except Exception: print(me.text[:300])
+            try: 
+                error_data = me.json()
+                print(f"Error: {error_data}")
+                info["error"] = error_data.get("error", {}).get("message", "Unknown error")
+            except Exception: 
+                print(me.text[:300])
+                info["error"] = me.text[:300]
+            return info  # Don't continue if basic validation fails
+            
+        # Check permissions
         perms = requests.get(f"{base}/me/permissions", params={"access_token": token}, timeout=15)
         if perms.ok:
             data = perms.json().get("data", [])
@@ -237,10 +263,13 @@ def _facebook_preflight(token: str) -> dict:
             info["missing_perms"] = [r for r in required if r not in granted]
         else:
             print(f"FB preflight /me/permissions failed: {perms.status_code}")
-            try: print(perms.json())
-            except Exception: print(perms.text[:300])
+            try: 
+                print(perms.json())
+            except Exception: 
+                print(perms.text[:300])
     except Exception as e:
         print(f"FB preflight exception: {e}")
+        info["error"] = str(e)
     return info
 
 
@@ -290,33 +319,67 @@ def gcs_to_social(event, context):
         # Upload to YouTube (gracefully handle upload limit exceeded)
         print("\n" + "-"*60)
         yt_video_id = None
+        yt_success = False
         try:
             yt_video_id = _upload_youtube(local_path, title, description, tags)
+            yt_success = True
         except Exception as yt_err:
             err_text = str(yt_err)
-            if "uploadLimitExceeded" in err_text or "exceeded the number of videos" in err_text:
-                print("⚠️ YouTube daily upload limit exceeded; skipping YouTube but proceeding to Facebook.")
+            if "uploadLimitExceeded" in err_text or "exceeded the number of videos" in err_text or "YouTube upload limit exceeded" in err_text:
+                print("⚠️ YouTube daily upload limit exceeded.")
+                print("   Action needed:")
+                print("   1. Verify your YouTube channel (phone verification in YouTube Studio)")
+                print("   2. Wait 24 hours before uploading more videos")
+                print("   3. Consider rate-limiting uploads to avoid hitting this limit")
+                print("   Continuing with Facebook upload...")
             else:
-                print(f"YouTube upload error: {yt_err}")
-                # Still proceed to Facebook attempt
+                print(f"❌ YouTube upload error: {yt_err}")
+                print("   Continuing with Facebook upload...")
 
         # Optionally upload to Facebook if secrets are present
         fb_video_id = None
+        fb_success = False
         fb_page_id = _try_get_secret("FB_PAGE_ID")
         fb_page_token = _try_get_secret("FB_PAGE_TOKEN")
         if fb_page_id and fb_page_token:
             # Preflight token & permissions
             print("\nFacebook token preflight...")
             fb_info = _facebook_preflight(fb_page_token)
-            print(f"FB token valid: {fb_info['token_valid']} | Missing perms: {fb_info['missing_perms']}")
-            if fb_info['missing_perms']:
-                print("⚠️ Missing required permissions for video publishing. Upload may fail.")
-            # Small random delay before Facebook (avoid simultaneous posts)
-            delay = random.randint(10, 30)
-            print(f"\nWaiting {delay} seconds before Facebook upload...")
-            time.sleep(delay)
-            print("-"*60)
-            fb_video_id = _upload_facebook(local_path, title, description)
+            print(f"FB token valid: {fb_info['token_valid']} | Granted perms: {fb_info['perms']}")
+            
+            if not fb_info['token_valid']:
+                print("❌ Facebook token is INVALID!")
+                print(f"   Error: {fb_info.get('error', 'Unknown error')}")
+                print("   Action needed:")
+                print("   1. Generate a new long-lived User Access Token")
+                print("   2. Exchange it for a Page Access Token using:")
+                print("      curl 'https://graph.facebook.com/v19.0/me/accounts?access_token=YOUR_USER_TOKEN'")
+                print("   3. Update the FB_PAGE_TOKEN secret in Google Cloud Secret Manager")
+                print("   Skipping Facebook upload.")
+            elif fb_info['missing_perms']:
+                print(f"⚠️ Missing required permissions: {fb_info['missing_perms']}")
+                print("   Upload may fail. Please regenerate token with all required scopes.")
+                # Try anyway, but warn
+                delay = random.randint(10, 30)
+                print(f"\nWaiting {delay} seconds before Facebook upload...")
+                time.sleep(delay)
+                print("-"*60)
+                try:
+                    fb_video_id = _upload_facebook(local_path, title, description)
+                    fb_success = True
+                except Exception as fb_err:
+                    print(f"❌ Facebook upload failed: {fb_err}")
+            else:
+                # Token is valid and has all permissions
+                delay = random.randint(10, 30)
+                print(f"\nWaiting {delay} seconds before Facebook upload...")
+                time.sleep(delay)
+                print("-"*60)
+                try:
+                    fb_video_id = _upload_facebook(local_path, title, description)
+                    fb_success = True
+                except Exception as fb_err:
+                    print(f"❌ Facebook upload failed: {fb_err}")
         else:
             missing = []
             if not fb_page_id:
@@ -330,15 +393,21 @@ def gcs_to_social(event, context):
         
         # Log success
         result = {
-            "status": "success",
-            "youtube_video_id": yt_video_id,
-            "youtube_url": f"https://youtube.com/shorts/{yt_video_id}",
+            "status": "partial_success" if (yt_success or fb_success) and not (yt_success and fb_success) else ("success" if (yt_success and fb_success) else "failed"),
+            "youtube_success": yt_success,
+            "facebook_success": fb_success,
+            **({"youtube_video_id": yt_video_id, "youtube_url": f"https://youtube.com/shorts/{yt_video_id}"} if yt_video_id else {}),
             **({"facebook_video_id": fb_video_id} if fb_video_id else {}),
             "source_file": blob_name
         }
         
         print("\n" + "="*60)
-        print("✅ SUCCESS!")
+        if result["status"] == "success":
+            print("✅ COMPLETE SUCCESS! (Both platforms)")
+        elif result["status"] == "partial_success":
+            print("⚠️ PARTIAL SUCCESS (at least one platform succeeded)")
+        else:
+            print("❌ BOTH PLATFORMS FAILED")
         print("="*60)
         print(json.dumps(result, indent=2))
         
