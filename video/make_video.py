@@ -38,7 +38,7 @@ def ensure_dirs():
     """Create necessary directories"""
     OUTPUT_DIR.mkdir(exist_ok=True)
     WORK_DIR.mkdir(exist_ok=True)
-    print(f"✓ Directories ready: {OUTPUT_DIR}, {WORK_DIR}")
+    print(f"OK Directories ready: {OUTPUT_DIR}, {WORK_DIR}")
 
 def calculate_duration(text):
     """Calculate slide duration based on text length with slower speeds for long text."""
@@ -112,7 +112,7 @@ def load_font():
     """Load custom font or fallback to default"""
     try:
         if FONT_PATH.exists():
-            print(f"✓ Using custom font: {FONT_PATH}")
+            print(f"OK Using custom font: {FONT_PATH}")
             return ImageFont.truetype(str(FONT_PATH), FONT_SIZE)
         else:
             print("⚠ Custom font not found, using default")
@@ -188,7 +188,7 @@ def put_text_on_image(img_path, txt_path, out_path):
     
     # Calculate duration based on text length
     duration = calculate_duration(text)
-    print(f"  ✓ Rendered: {Path(img_path).name} -> {Path(out_path).name} ({duration:.1f}s)")
+    print(f"  OK Rendered: {Path(img_path).name} -> {Path(out_path).name} ({duration:.1f}s)")
     
     return duration
 
@@ -205,18 +205,18 @@ def build_concat_list(image_files_with_durations):
         if image_files_with_durations:
             filename = Path(image_files_with_durations[-1][0]).name
             f.write(f"file '{filename}'\n")
-    print(f"✓ Created concat list: {lst_path}")
+    print(f"OK Created concat list: {lst_path}")
     return lst_path
 
 def run_ffmpeg(cmd, cwd=None):
     """Execute ffmpeg command"""
-    print(f"🎬 Running ffmpeg...")
+    print(f"[Video] Running ffmpeg...")
     print(f"   Command: {' '.join(cmd[:5])}...")
     if cwd:
         print(f"   Working dir: {cwd}")
     try:
         subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=cwd)
-        print("   ✓ ffmpeg completed")
+        print("   OK ffmpeg completed")
     except subprocess.CalledProcessError as e:
         # Capture stderr to see what went wrong
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
@@ -226,7 +226,7 @@ def run_ffmpeg(cmd, cwd=None):
 
 def main():
     print("="*60)
-    print("🎥 News-Agent Video Generator")
+    print("News-Agent Video Generator")
     print("="*60)
     
     ensure_dirs()
@@ -248,10 +248,10 @@ def main():
     if not images:
         raise SystemExit(f"❌ No images found in {INPUT_DIR}")
     
-    print(f"📸 Found {len(images)} images")
+    print(f"[Images] Found {len(images)} images")
 
     # Render text on each image
-    print("\n🖼️  Rendering captions on images...")
+    print("\n[Render] Rendering captions on images...")
     baked_with_durations = []
     for img in images:
         stem = Path(img).stem
@@ -267,7 +267,7 @@ def main():
 
     # Build slideshow with fade transitions
     total_duration = sum(d for _, d in baked_with_durations)
-    print(f"\n🎬 Creating slideshow ({len(baked_with_durations)} slides, {total_duration:.1f}s total)...")
+    print(f"\n[Video] Creating slideshow ({len(baked_with_durations)} slides, {total_duration:.1f}s total)...")
     
     # Use absolute paths for output, relative path for inputs (which are in work/)
     abs_video_no_audio = video_no_audio.absolute()
@@ -318,14 +318,14 @@ def main():
         print(f"   ♪ Fade in/out: {fade_duration}s")
         print(f"   ♪ Volume: 30% (0.3)")
     else:
-        print(f"⚠️  No MP3 files found in {MUSIC_DIR}, skipping audio")
+        print(f"WARNING: No MP3 files found in {MUSIC_DIR}, skipping audio")
         os.replace(video_no_audio, final_video)
         print(f"✅ Video (no audio): {final_video}")
 
     # Display file size
     size_mb = final_video.stat().st_size / (1024 * 1024)
-    print(f"\n📊 Final video size: {size_mb:.2f} MB")
-    print(f"⏱️  Duration: ~{total_duration}s")
+    print(f"\n[Info] Final video size: {size_mb:.2f} MB")
+    print(f"[Time] Duration: ~{total_duration}s")
     print("="*60)
     print("✅ Video generation complete!")
     print("="*60)
