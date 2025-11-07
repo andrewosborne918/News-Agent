@@ -9,6 +9,7 @@ import time
 import random
 import json
 from google.cloud import storage, secretmanager
+from google.api_core.exceptions import NotFound
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -23,6 +24,13 @@ def _get_secret(name: str) -> str:
     path = client.secret_version_path(PROJECT_ID, name, "latest")
     response = client.access_secret_version(request={"name": path})
     return response.payload.data.decode()
+
+def _try_get_secret(name: str):
+    """Return secret value or None if it doesn't exist."""
+    try:
+        return _get_secret(name)
+    except NotFound:
+        return None
 
 def _download_from_gcs(bucket_name: str, blob_name: str) -> str:
     """Download file from Google Cloud Storage to temp file"""
@@ -198,15 +206,25 @@ def gcs_to_social(event, context):
         # Upload to YouTube
         print("\n" + "-"*60)
         yt_video_id = _upload_youtube(local_path, title, description, tags)
-        
-        # Small random delay before Facebook (avoid simultaneous posts)
-        delay = random.randint(10, 30)
-        print(f"\nWaiting {delay} seconds before Facebook upload...")
-        time.sleep(delay)
-        
-        # Upload to Facebook
-        print("-"*60)
-        fb_video_id = _upload_facebook(local_path, description)
+
+        # Optionally upload to Facebook if secrets are present
+        fb_video_id = None
+        fb_page_id = _try_get_secret("FB_PAGE_ID")
+        fb_page_token = _try_get_secret("FB_PAGE_TOKEN")
+        if fb_page_id and fb_page_token:
+            # Small random delay before Facebook (avoid simultaneous posts)
+            delay = random.randint(10, 30)
+            print(f"\nWaiting {delay} seconds before Facebook upload...")
+            time.sleep(delay)
+            print("-"*60)
+            fb_video_id = _upload_facebook(local_path, description)
+        else:
+            missing = []
+            if not fb_page_id:
+                missing.append("FB_PAGE_ID")
+            if not fb_page_token:
+                missing.append("FB_PAGE_TOKEN")
+            print(f"Skipping Facebook upload (missing secrets: {', '.join(missing)})")
         
         # Clean up temp file
         os.remove(local_path)
@@ -216,7 +234,7 @@ def gcs_to_social(event, context):
             "status": "success",
             "youtube_video_id": yt_video_id,
             "youtube_url": f"https://youtube.com/shorts/{yt_video_id}",
-            "facebook_video_id": fb_video_id,
+            **({"facebook_video_id": fb_video_id} if fb_video_id else {}),
             "source_file": blob_name
         }
         

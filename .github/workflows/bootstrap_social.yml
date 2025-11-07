@@ -1,0 +1,99 @@
+name: Bootstrap Social Poster
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Preflight - Show provided secrets (masked)
+        env:
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Project: $(gcloud config get-value project 2>/dev/null)"
+          echo "FB_PAGE_ID set: $([[ -n "${FB_PAGE_ID:-}" ]] && echo yes || echo no)"
+          echo "FB_PAGE_TOKEN set: $([[ -n "${FB_PAGE_TOKEN:-}" ]] && echo yes || echo no)"
+
+      - name: Upsert Facebook secrets into Secret Manager
+        env:
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${FB_PAGE_ID:-}" ]]; then
+            printf '%s' "$FB_PAGE_ID" | gcloud secrets create FB_PAGE_ID --data-file=- || \
+            printf '%s' "$FB_PAGE_ID" | gcloud secrets versions add FB_PAGE_ID --data-file=-
+            echo "✅ FB_PAGE_ID upserted"
+          else
+            echo "⚠️ FB_PAGE_ID not provided in repo secrets; skipping"
+          fi
+
+          if [[ -n "${FB_PAGE_TOKEN:-}" ]]; then
+            printf '%s' "$FB_PAGE_TOKEN" | gcloud secrets create FB_PAGE_TOKEN --data-file=- || \
+            printf '%s' "$FB_PAGE_TOKEN" | gcloud secrets versions add FB_PAGE_TOKEN --data-file=-
+            echo "✅ FB_PAGE_TOKEN upserted"
+          else
+            echo "⚠️ FB_PAGE_TOKEN not provided in repo secrets; skipping"
+          fi
+
+      - name: Deploy Cloud Function (gcs_to_social)
+        env:
+          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+        run: |
+          set -euo pipefail
+          REGION=us-central1
+          PROJECT=$(gcloud config get-value project 2>/dev/null)
+          if [[ -z "${GCS_BUCKET:-}" ]]; then
+            echo "❌ GCS_BUCKET secret not set"; exit 1
+          fi
+
+          pushd uploader >/dev/null
+          gcloud functions deploy gcs_to_social \
+            --gen2 \
+            --runtime=python311 \
+            --region="$REGION" \
+            --trigger-event-filters="type=google.cloud.storage.object.v1.finalized" \
+            --trigger-event-filters="bucket=$GCS_BUCKET" \
+            --entry-point=gcs_to_social \
+            --memory=512MB \
+            --timeout=540s \
+            --set-env-vars=GCP_PROJECT="$PROJECT"
+          popd >/dev/null
+
+      - name: Grant function IAM for secrets and bucket
+        env:
+          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+        run: |
+          set -euo pipefail
+          REGION=us-central1
+          SA=$(gcloud functions describe gcs_to_social --region="$REGION" --gen2 --format='value(serviceConfig.serviceAccountEmail)')
+          echo "Function SA: $SA"
+          gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
+            --member="serviceAccount:$SA" \
+            --role="roles/secretmanager.secretAccessor"
+          gcloud storage buckets add-iam-policy-binding gs://$GCS_BUCKET \
+            --member="serviceAccount:$SA" \
+            --role="roles/storage.objectViewer"
+
+      - name: Done
+        run: |
+          echo "✅ Bootstrap complete. Run the main workflow to upload a video and trigger posting."
