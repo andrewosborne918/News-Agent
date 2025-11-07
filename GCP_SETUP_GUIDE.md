@@ -91,10 +91,22 @@ echo "Your bucket: $BUCKET"
 gcloud iam service-accounts create gh-actions-uploader \
   --display-name="GitHub Actions Uploader"
 
-# Grant storage permissions
-gcloud projects add-iam-policy-binding news-automation \
+# Grant storage permissions (bucket-level is recommended)
+# Minimal set for uploads using `gcloud storage cp`:
+# - roles/storage.objectCreator (create new objects)
+# - roles/storage.objectViewer (allows the CLI to check destination object)
+gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
   --member="serviceAccount:gh-actions-uploader@news-automation.iam.gserviceaccount.com" \
   --role="roles/storage.objectCreator"
+
+gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
+  --member="serviceAccount:gh-actions-uploader@news-automation.iam.gserviceaccount.com" \
+  --role="roles/storage.objectViewer"
+
+# Simpler (broader) alternative if you prefer one role:
+# gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
+#   --member="serviceAccount:gh-actions-uploader@news-automation.iam.gserviceaccount.com" \
+#   --role="roles/storage.objectAdmin"
 
 # Create JSON key
 gcloud iam service-accounts keys create gh-actions.json \

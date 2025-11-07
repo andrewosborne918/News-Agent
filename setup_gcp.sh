@@ -45,9 +45,14 @@ echo "============================================================"
 gcloud iam service-accounts create gh-actions-uploader \
   --display-name="GitHub Actions Uploader"
 
-gcloud projects add-iam-policy-binding $PROJECT_ID \
+# Grant bucket-level permissions required for uploads
+gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
   --member="serviceAccount:gh-actions-uploader@$PROJECT_ID.iam.gserviceaccount.com" \
   --role="roles/storage.objectCreator"
+
+gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
+  --member="serviceAccount:gh-actions-uploader@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/storage.objectViewer"
 
 gcloud iam service-accounts keys create gh-actions.json \
   --iam-account=gh-actions-uploader@$PROJECT_ID.iam.gserviceaccount.com

@@ -98,6 +98,27 @@ jobs:
           echo "Listing bucket metadata (if accessible): gs://$GCS_BUCKET"
           gcloud storage ls -b gs://$GCS_BUCKET || echo "Note: Could not list bucket metadata; continuing to upload step"
 
+      - name: Show IAM fix commands (if upload gets 403)
+        if: always()
+        env:
+          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+        run: |
+          # Derive the service account email from the credentials file created by the auth action
+          SA_EMAIL=$(python - <<'PY'
+import json, os
+path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS') or os.environ.get('GOOGLE_GHA_CREDS_PATH')
+print(json.load(open(path))['client_email'])
+PY
+          )
+          echo "If the next step fails with 403, grant these roles to the service account on your bucket:"
+          echo "Service Account: ${SA_EMAIL}"
+          echo "Bucket: gs://${GCS_BUCKET}"
+          echo "---- Run in Cloud Shell (copy/paste) ----"
+          echo "gcloud storage buckets add-iam-policy-binding gs://${GCS_BUCKET} --member=serviceAccount:${SA_EMAIL} --role=roles/storage.objectCreator"
+          echo "gcloud storage buckets add-iam-policy-binding gs://${GCS_BUCKET} --member=serviceAccount:${SA_EMAIL} --role=roles/storage.objectViewer"
+          echo "# Alternatively, a single broader role:"
+          echo "# gcloud storage buckets add-iam-policy-binding gs://${GCS_BUCKET} --member=serviceAccount:${SA_EMAIL} --role=roles/storage.objectAdmin"
+
       - name: Upload video to Google Cloud Storage
         run: |
           # Copy final video to generated folder with timestamp
