@@ -39,7 +39,11 @@ def _maybe_download_companion_metadata(bucket: str, blob_name: str) -> dict | No
     client = storage.Client()
     bucket_obj = client.bucket(bucket)
     meta_blob = bucket_obj.blob(meta_blob_name)
+    
+    print(f"DEBUG: Looking for companion metadata: {meta_blob_name}")
+    
     if not meta_blob.exists():
+        print(f"DEBUG: No companion JSON found at {meta_blob_name}")
         return None
     try:
         fd, tmp = tempfile.mkstemp(suffix=".json")
@@ -48,11 +52,17 @@ def _maybe_download_companion_metadata(bucket: str, blob_name: str) -> dict | No
         data = json.loads(Path(tmp).read_text(encoding="utf-8"))
         os.remove(tmp)
         if isinstance(data, dict):
-            print(f"Found companion metadata JSON: {meta_blob_name}")
+            print(f"DEBUG: Found companion metadata JSON: {meta_blob_name}")
+            print(f"DEBUG:   Title: {data.get('title', 'N/A')}")
+            print(f"DEBUG:   Description: {data.get('description', 'N/A')[:100]}...")
+            print(f"DEBUG:   Tags: {data.get('tags', [])}")
             return data
+        else:
+            print(f"DEBUG: Companion JSON is not a dict, ignoring")
+            return None
     except Exception as e:
-        print(f"Failed to read companion metadata JSON: {e}")
-    return None
+        print(f"DEBUG: Failed to read companion metadata: {e}")
+        return None
 
 def _derive_metadata(bucket: str, blob_name: str) -> tuple:
     """Return (title, description, tags) preferring companion JSON over heuristics."""
@@ -180,36 +190,26 @@ def _upload_facebook(filepath: str, title: str, description: str) -> str:
             files={"source": video_file},
             timeout=300  # 5 minute timeout for large files
         )
-    
-    response.raise_for_status()
-    video_id = response.json().get("id")
-    
+
+    if not response.ok:
+        print(f"Facebook response status: {response.status_code}")
+        try:
+            print(f"Facebook error body: {response.json()}")
+        except Exception:
+            print(f"Facebook error text: {response.text[:500]}")
+        # Raise after logging details
+        response.raise_for_status()
+
+    video_id = None
+    try:
+        data = response.json()
+        video_id = data.get("id")
+    except Exception as parse_err:
+        print(f"WARNING: Could not parse Facebook JSON response: {parse_err}")
+
     print(f"✅ Facebook upload complete: Video ID {video_id}")
-    
     return video_id
 
-def _derive_metadata(bucket: str, blob_name: str) -> tuple:
-    """
-    Extract metadata from filename and generate title/description/tags
-    You can enhance this to read from a companion JSON file if needed
-    """
-    # Get base filename without path and extension
-    base = os.path.basename(blob_name)
-    name_without_ext = os.path.splitext(base)[0]
-    
-    # Convert filename to readable title
-    # Example: "1730923200-video" -> "Daily News Short"
-    title = name_without_ext.replace("_", " ").replace("-", " ").strip()
-    if not title or title.isdigit():
-        title = "Daily News Short"
-    
-    # Default description with hashtags
-    description = f"{title}\n\nStay informed with our daily news shorts.\n\n#news #shorts #breaking #politics #dailynews"
-    
-    # Tags for YouTube
-    tags = ["news", "shorts", "breaking news", "politics", "daily news"]
-    
-    return title, description, tags
 
 def gcs_to_social(event, context):
     """
@@ -231,14 +231,15 @@ def gcs_to_social(event, context):
     print(f"Bucket: {bucket}")
     print(f"File: {blob_name}")
     
-    # Only process files in the "incoming/" folder
+    # Only process mp4 videos in the incoming/ folder
     if not blob_name.startswith("incoming/"):
         print(f"Skipping {blob_name} (not in incoming/ folder)")
         return
-    
-    # Skip if it's a folder/directory marker
     if blob_name.endswith("/"):
         print("Skipping directory marker")
+        return
+    if not blob_name.lower().endswith(".mp4"):
+        print(f"Skipping {blob_name} (not an .mp4 file)")
         return
     
     try:
