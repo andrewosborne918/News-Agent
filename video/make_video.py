@@ -115,10 +115,10 @@ def load_font():
             print(f"OK Using custom font: {FONT_PATH}")
             return ImageFont.truetype(str(FONT_PATH), FONT_SIZE)
         else:
-            print("⚠ Custom font not found, using default")
+            print("WARNING: Custom font not found, using default")
             return ImageFont.load_default()
     except Exception as e:
-        print(f"⚠ Font loading error: {e}, using default")
+        print(f"WARNING: Font loading error: {e}, using default")
         return ImageFont.load_default()
 
 def put_text_on_image(img_path, txt_path, out_path):
@@ -220,7 +220,7 @@ def run_ffmpeg(cmd, cwd=None):
     except subprocess.CalledProcessError as e:
         # Capture stderr to see what went wrong
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
-        print(f"❌ ffmpeg failed with exit code {result.returncode}")
+        print(f"ERROR: ffmpeg failed with exit code {result.returncode}")
         print(f"Error output:\n{result.stderr}")
         raise
 
@@ -246,7 +246,7 @@ def main():
     images = sorted(images, key=numeric_key)
     
     if not images:
-        raise SystemExit(f"❌ No images found in {INPUT_DIR}")
+        raise SystemExit(f"ERROR: No images found in {INPUT_DIR}")
     
     print(f"[Images] Found {len(images)} images")
 
@@ -314,20 +314,20 @@ def main():
             "-shortest",
             str(final_video)
         ])
-        print(f"✅ Video with music: {final_video}")
-        print(f"   ♪ Fade in/out: {fade_duration}s")
-        print(f"   ♪ Volume: 30% (0.3)")
+        print(f"[OK] Video with music: {final_video}")
+        print(f"   - Fade in/out: {fade_duration}s")
+        print(f"   - Volume: 30% (0.3)")
     else:
         print(f"WARNING: No MP3 files found in {MUSIC_DIR}, skipping audio")
         os.replace(video_no_audio, final_video)
-        print(f"✅ Video (no audio): {final_video}")
+        print(f"[OK] Video (no audio): {final_video}")
 
     # Display file size
     size_mb = final_video.stat().st_size / (1024 * 1024)
     print(f"\n[Info] Final video size: {size_mb:.2f} MB")
     print(f"[Time] Duration: ~{total_duration}s")
     print("="*60)
-    print("✅ Video generation complete!")
+    print("[OK] Video generation complete!")
     print("="*60)
 
 if __name__ == "__main__":
