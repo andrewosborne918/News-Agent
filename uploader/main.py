@@ -176,7 +176,7 @@ def _upload_facebook(filepath: str, title: str, description: str) -> str:
     # Facebook Graph API endpoint for video upload
     url = f"https://graph-video.facebook.com/v19.0/{page_id}/videos"
     
-    # Create a formatted message with title and description
+    # Create a formatted message with title and description (Facebook surfaces description; keep title separately)
     message = f"{title}\n\n{description}" if title and description else (title or description or "Daily news update")
     
     # Upload video file
@@ -185,7 +185,9 @@ def _upload_facebook(filepath: str, title: str, description: str) -> str:
             url,
             data={
                 "access_token": token,
-                "description": message  # Facebook uses "description" field for the post text
+                "description": message,
+                "title": title[:100],  # Provide explicit title
+                "published": "true"   # Ensure the video is published (not unpublished/draft)
             },
             files={"source": video_file},
             timeout=300  # 5 minute timeout for large files
@@ -193,6 +195,10 @@ def _upload_facebook(filepath: str, title: str, description: str) -> str:
 
     if not response.ok:
         print(f"Facebook response status: {response.status_code}")
+        request_id = response.headers.get('x-fb-trace-id') or response.headers.get('x-fb-rev')
+        if request_id:
+            print(f"Facebook request trace id: {request_id}")
+        print(f"Facebook response headers (truncated): { {k: v for k, v in list(response.headers.items())[:10]} }")
         try:
             print(f"Facebook error body: {response.json()}")
         except Exception:
@@ -209,6 +215,33 @@ def _upload_facebook(filepath: str, title: str, description: str) -> str:
 
     print(f"✅ Facebook upload complete: Video ID {video_id}")
     return video_id
+
+def _facebook_preflight(token: str) -> dict:
+    """Validate Facebook token and permissions; return dict with status info."""
+    base = "https://graph.facebook.com/v19.0"
+    info = {"token_valid": False, "missing_perms": [], "perms": []}
+    try:
+        me = requests.get(f"{base}/me", params={"access_token": token}, timeout=15)
+        if me.ok:
+            info["token_valid"] = True
+        else:
+            print(f"FB preflight /me failed: {me.status_code}")
+            try: print(me.json())
+            except Exception: print(me.text[:300])
+        perms = requests.get(f"{base}/me/permissions", params={"access_token": token}, timeout=15)
+        if perms.ok:
+            data = perms.json().get("data", [])
+            granted = [p["permission"] for p in data if p.get("status") == "granted"]
+            info["perms"] = granted
+            required = ["pages_manage_posts", "pages_read_engagement", "publish_video"]
+            info["missing_perms"] = [r for r in required if r not in granted]
+        else:
+            print(f"FB preflight /me/permissions failed: {perms.status_code}")
+            try: print(perms.json())
+            except Exception: print(perms.text[:300])
+    except Exception as e:
+        print(f"FB preflight exception: {e}")
+    return info
 
 
 def gcs_to_social(event, context):
@@ -263,6 +296,12 @@ def gcs_to_social(event, context):
         fb_page_id = _try_get_secret("FB_PAGE_ID")
         fb_page_token = _try_get_secret("FB_PAGE_TOKEN")
         if fb_page_id and fb_page_token:
+            # Preflight token & permissions
+            print("\nFacebook token preflight...")
+            fb_info = _facebook_preflight(fb_page_token)
+            print(f"FB token valid: {fb_info['token_valid']} | Missing perms: {fb_info['missing_perms']}")
+            if fb_info['missing_perms']:
+                print("⚠️ Missing required permissions for video publishing. Upload may fail.")
             # Small random delay before Facebook (avoid simultaneous posts)
             delay = random.randint(10, 30)
             print(f"\nWaiting {delay} seconds before Facebook upload...")
