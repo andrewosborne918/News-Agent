@@ -156,7 +156,7 @@ def _upload_youtube(filepath: str, title: str, description: str, tags: list) -> 
     
     return video_id
 
-def _upload_facebook(filepath: str, description: str) -> str:
+def _upload_facebook(filepath: str, title: str, description: str) -> str:
     """Upload video to Facebook Page"""
     print(f"Uploading to Facebook")
     
@@ -166,13 +166,16 @@ def _upload_facebook(filepath: str, description: str) -> str:
     # Facebook Graph API endpoint for video upload
     url = f"https://graph-video.facebook.com/v19.0/{page_id}/videos"
     
+    # Create a formatted message with title and description
+    message = f"{title}\n\n{description}" if title and description else (title or description or "Daily news update")
+    
     # Upload video file
     with open(filepath, "rb") as video_file:
         response = requests.post(
             url,
             data={
                 "access_token": token,
-                "description": description
+                "description": message  # Facebook uses "description" field for the post text
             },
             files={"source": video_file},
             timeout=300  # 5 minute timeout for large files
@@ -264,7 +267,7 @@ def gcs_to_social(event, context):
             print(f"\nWaiting {delay} seconds before Facebook upload...")
             time.sleep(delay)
             print("-"*60)
-            fb_video_id = _upload_facebook(local_path, description)
+            fb_video_id = _upload_facebook(local_path, title, description)
         else:
             missing = []
             if not fb_page_id:
