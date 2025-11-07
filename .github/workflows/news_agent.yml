@@ -104,12 +104,7 @@ jobs:
           GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
         run: |
           # Derive the service account email from the credentials file created by the auth action
-          SA_EMAIL=$(python - <<'PY'
-import json, os
-path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS') or os.environ.get('GOOGLE_GHA_CREDS_PATH')
-print(json.load(open(path))['client_email'])
-PY
-          )
+          SA_EMAIL=$(python -c "import json, os; p=os.environ.get('GOOGLE_APPLICATION_CREDENTIALS') or os.environ.get('GOOGLE_GHA_CREDS_PATH'); print(json.load(open(p))['client_email'])")
           echo "If the next step fails with 403, grant these roles to the service account on your bucket:"
           echo "Service Account: ${SA_EMAIL}"
           echo "Bucket: gs://${GCS_BUCKET}"
