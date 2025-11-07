@@ -284,32 +284,18 @@ def main():
         str(abs_video_no_audio)
     ], cwd=WORK_DIR)
 
-    # Mix in music if available
-    music_files = sorted(MUSIC_DIR.glob("*.mp3"))  # Sort alphabetically for consistent ordering
-    
+    # Mix in music if available (deterministic rotation by GitHub run number; fallback random)
+    music_files = sorted(MUSIC_DIR.glob("*.mp3"))
     if music_files:
-        # Use music files in order, cycling through them
-        # Create a state file to track which track to use next
-        state_file = MUSIC_DIR / ".music_index"
-        
-        # Read current index or start at 0
-        if state_file.exists():
-            try:
-                current_index = int(state_file.read_text().strip())
-            except (ValueError, FileNotFoundError):
-                current_index = 0
+        run_number = os.environ.get("GITHUB_RUN_NUMBER")
+        if run_number and run_number.isdigit():
+            idx = int(run_number) % len(music_files)
+            print(f"\nRun number detected: {run_number}; rotating music index -> {idx}")
         else:
-            current_index = 0
-        
-        # Select the current track and advance to next
-        selected_music = music_files[current_index % len(music_files)]
-        next_index = (current_index + 1) % len(music_files)
-        
-        # Save the next index for next time
-        state_file.write_text(str(next_index))
-        
-        print(f"\n🎵 Adding background music: {selected_music.name}")
-        print(f"   (Track {current_index + 1} of {len(music_files)}, cycling through all tracks)")
+            idx = random.randint(0, len(music_files) - 1)
+            print(f"\nNo GITHUB_RUN_NUMBER; random music index -> {idx}")
+        selected_music = music_files[idx]
+        print(f"\n\ud83c\udfb5 Adding background music: {selected_music.name} (track {idx+1}/{len(music_files)})")
         
         # Calculate fade durations (2 seconds fade in/out)
         fade_duration = 2.0

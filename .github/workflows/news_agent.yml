@@ -76,6 +76,10 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python generate_caption.py generated
+          TIMESTAMP=$(date +%s)
+          export TIMESTAMP
+          python generate_video_metadata.py
+          echo "$TIMESTAMP" > generated/.timestamp
 
       # Authenticate first so subsequent CLI setup and commands pick up creds
       - name: Authenticate to Google Cloud
@@ -117,12 +121,16 @@ jobs:
       - name: Upload video to Google Cloud Storage
         run: |
           # Copy final video to generated folder with timestamp
-          TIMESTAMP=$(date +%s)
+          TIMESTAMP=$(cat generated/.timestamp)
           cp output/final.mp4 generated/news_video_${TIMESTAMP}.mp4
           
           # Upload to GCS (triggers Cloud Function automatically)
           # Use gcloud storage (recommended with github-actions/auth) instead of gsutil
           gcloud storage cp generated/news_video_${TIMESTAMP}.mp4 gs://${{ secrets.GCS_BUCKET }}/incoming/
+          # Upload companion metadata JSON if present
+          if [ -f generated/news_video_${TIMESTAMP}.json ]; then
+            gcloud storage cp generated/news_video_${TIMESTAMP}.json gs://${{ secrets.GCS_BUCKET }}/incoming/
+          fi
           
           echo "✅ Video uploaded to GCS - Cloud Function will handle posting"
           echo "Video: gs://${{ secrets.GCS_BUCKET }}/incoming/news_video_${TIMESTAMP}.mp4"

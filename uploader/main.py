@@ -3,6 +3,10 @@ Google Cloud Function: Automatically post videos to YouTube Shorts + Facebook
 Triggers when a new video is uploaded to Google Cloud Storage
 """
 
+from pathlib import Path
+
+from google.cloud import storage
+
 import os
 import tempfile
 import time
@@ -25,6 +29,49 @@ def _get_secret(name: str) -> str:
     response = client.access_secret_version(request={"name": path})
     return response.payload.data.decode()
 
+    
+def _maybe_download_companion_metadata(bucket: str, blob_name: str) -> dict | None:
+    """If a companion JSON file exists (same base name with .json) download and parse it."""
+    if not blob_name.endswith(".mp4"):
+        return None
+    base_no_ext = os.path.splitext(blob_name)[0]
+    meta_blob_name = base_no_ext + ".json"
+    client = storage.Client()
+    bucket_obj = client.bucket(bucket)
+    meta_blob = bucket_obj.blob(meta_blob_name)
+    if not meta_blob.exists():
+        return None
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        meta_blob.download_to_filename(tmp)
+        data = json.loads(Path(tmp).read_text(encoding="utf-8"))
+        os.remove(tmp)
+        if isinstance(data, dict):
+            print(f"Found companion metadata JSON: {meta_blob_name}")
+            return data
+    except Exception as e:
+        print(f"Failed to read companion metadata JSON: {e}")
+    return None
+
+def _derive_metadata(bucket: str, blob_name: str) -> tuple:
+    """Return (title, description, tags) preferring companion JSON over heuristics."""
+    meta = _maybe_download_companion_metadata(bucket, blob_name)
+    if meta:
+        title = (meta.get("title") or "Daily News Update").strip()[:100]
+        description = (meta.get("description") or title)[:4900]
+        tags = meta.get("tags") or ["news", "politics", "shorts", "breaking"]
+        return title, description, tags
+
+    base = os.path.basename(blob_name)
+    stem = os.path.splitext(base)[0]
+    cleaned = stem.replace("news_video", "").replace("_", " ").strip()
+    if cleaned.isdigit() or len(cleaned) < 4:
+        cleaned = "Daily News Update"
+    title = cleaned[:100]
+    description = f"{title}\n\nStay informed with our daily news shorts.\n\n#news #shorts #politics #dailynews"
+    tags = ["news", "politics", "shorts", "daily news"]
+    return title, description, tags
 def _try_get_secret(name: str):
     """Return secret value or None if it doesn't exist."""
     try:
