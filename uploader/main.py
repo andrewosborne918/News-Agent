@@ -1,6 +1,12 @@
 """
 Google Cloud Function: Automatically post videos to YouTube Shorts + Facebook
 Triggers when a new video is uploaded to Google Cloud Storage
+
+Enhancements:
+- Adds _polish_caption_with_ai() to rewrite title/description/hashtags in a
+  concise, neutral, professional news voice suitable for narration.
+- Normalizes hashtags for YouTube/Facebook.
+- Graceful fallback if AI is unavailable or returns bad output.
 """
 
 from pathlib import Path
@@ -12,6 +18,8 @@ import tempfile
 import time
 import random
 import json
+from typing import Dict, Any, List, Tuple
+
 from google.cloud import storage, secretmanager
 from google.api_core.exceptions import NotFound
 from google.oauth2.credentials import Credentials
@@ -23,6 +31,10 @@ import requests
 # Get project ID from environment (auto-injected by Cloud Functions)
 PROJECT_ID = os.environ.get("GCP_PROJECT")
 
+# -----------------------------
+# Secrets + helpers
+# -----------------------------
+
 def _get_secret(name: str) -> str:
     """Retrieve secret from Secret Manager"""
     client = secretmanager.SecretManagerServiceClient()
@@ -30,7 +42,17 @@ def _get_secret(name: str) -> str:
     response = client.access_secret_version(request={"name": path})
     return response.payload.data.decode()
 
-    
+def _try_get_secret(name: str):
+    """Return secret value or None if it doesn't exist."""
+    try:
+        return _get_secret(name)
+    except NotFound:
+        return None
+
+# -----------------------------
+# Companion metadata (optional)
+# -----------------------------
+
 def _maybe_download_companion_metadata(bucket: str, blob_name: str) -> dict | None:
     """If a companion JSON file exists (same base name with .json) download and parse it."""
     if not blob_name.endswith(".mp4"):
@@ -55,7 +77,7 @@ def _maybe_download_companion_metadata(bucket: str, blob_name: str) -> dict | No
         if isinstance(data, dict):
             print(f"DEBUG: Found companion metadata JSON: {meta_blob_name}")
             print(f"DEBUG:   Title: {data.get('title', 'N/A')}")
-            print(f"DEBUG:   Description: {data.get('description', 'N/A')[:100]}...")
+            print(f"DEBUG:   Description: {data.get('description', 'N/A')[:100]}.")
             print(f"DEBUG:   Tags: {data.get('tags', [])}")
             return data
         else:
@@ -83,12 +105,10 @@ def _derive_metadata(bucket: str, blob_name: str) -> tuple:
     description = f"{title}\n\nStay informed with our daily news shorts.\n\n#news #shorts #politics #dailynews"
     tags = ["news", "politics", "shorts", "daily news"]
     return title, description, tags
-def _try_get_secret(name: str):
-    """Return secret value or None if it doesn't exist."""
-    try:
-        return _get_secret(name)
-    except NotFound:
-        return None
+
+# -----------------------------
+# Storage + uploads
+# -----------------------------
 
 def _download_from_gcs(bucket_name: str, blob_name: str) -> str:
     """Download file from Google Cloud Storage to temp file"""
@@ -272,6 +292,121 @@ def _facebook_preflight(token: str) -> dict:
         info["error"] = str(e)
     return info
 
+# -----------------------------
+# AI Polishing (new)
+# -----------------------------
+
+def _normalize_hashtags(raw_tags: List[str], limit: int = 20) -> List[str]:
+    """Normalize and de-duplicate hashtags (drop '#', trim, no spaces, a-z0-9 only)."""
+    cleaned = []
+    seen = set()
+    for t in raw_tags or []:
+        if not t:
+            continue
+        t = t.strip()
+        # Remove leading '#'
+        if t.startswith("#"):
+            t = t[1:]
+        # Replace spaces/invalid with nothing, lowercase
+        t = "".join(ch for ch in t.lower() if ch.isalnum())
+        # Skip very short tokens
+        if len(t) < 2:
+            continue
+        if t not in seen:
+            cleaned.append(f"#{t}")
+            seen.add(t)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+def _polish_caption_with_ai(parts: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Use Gemini to rewrite the title/description/hashtags into a professional news tone.
+    Requires Secret Manager key: GEMINI_API_KEY
+    Falls back to original parts if unavailable or on error.
+    """
+    api_key = _try_get_secret("GEMINI_API_KEY")
+    if not api_key:
+        print("Polish: GEMINI_API_KEY not found — skipping AI polish.")
+        # Still normalize hashtags if present
+        parts["hashtags"] = _normalize_hashtags(parts.get("hashtags") or parts.get("tags", []))
+        return parts
+
+    # Build input payload for the model
+    source_title = (parts.get("title") or "").strip()
+    source_desc = (parts.get("description") or "").strip()
+
+    # If caption_utils also produced a long `script`/`narration`, include it
+    source_script = (parts.get("script") or parts.get("narration") or "").strip()
+
+    # Compose a single source block with whatever we have
+    story_block = "\n\n".join([s for s in [source_title, source_desc, source_script] if s])
+
+    prompt = f"""
+You are a newsroom copy editor. Rewrite this into a short, broadcast-ready news package:
+
+- Voice: neutral, concise, confident (anchor-style).
+- Style: smooth, natural for spoken narration; no filler; no opinion cues.
+- Include: 
+  1) a crisp SEO-friendly Title (≤ 90 chars),
+  2) a 2–4 sentence Description suitable for YouTube & Facebook (≤ 500 chars),
+  3) 8–15 topical Hashtags (single words, no spaces; return as a JSON array).
+
+Return strictly as minified JSON with keys: title, description, hashtags.
+
+SOURCE:
+{story_block}
+""".strip()
+
+    try:
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        headers = {"Content-Type": "application/json"}
+        body = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 512
+            }
+        }
+        r = requests.post(f"{url}?key={api_key}", headers=headers, json=body, timeout=25)
+        if not r.ok:
+            print(f"Polish: Gemini HTTP {r.status_code} — {r.text[:250]}")
+            parts["hashtags"] = _normalize_hashtags(parts.get("hashtags") or parts.get("tags", []))
+            return parts
+
+        data = r.json()
+        # Extract the text from the first candidate
+        text = ""
+        try:
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception:
+            # Some responses use 'output' or other shapes; fallback
+            text = json.dumps(data)[:500]
+
+        # The model returns JSON—parse it
+        polished = json.loads(text)
+        new_title = (polished.get("title") or source_title).strip()[:100]
+        new_desc = (polished.get("description") or source_desc).strip()[:4900]
+        new_tags = polished.get("hashtags") or []
+        if isinstance(new_tags, str):
+            # If someone returns comma delimited string
+            new_tags = [t.strip() for t in new_tags.split(",")]
+
+        parts["title"] = new_title or parts.get("title")
+        parts["description"] = new_desc or parts.get("description")
+        parts["hashtags"] = _normalize_hashtags(list(new_tags) or parts.get("hashtags") or parts.get("tags", []))
+        return parts
+
+    except Exception as e:
+        print(f"Polish: Exception — {e}")
+        parts["hashtags"] = _normalize_hashtags(parts.get("hashtags") or parts.get("tags", []))
+        return parts
+
+# -----------------------------
+# Entry point
+# -----------------------------
 
 def gcs_to_social(event, context):
     """
@@ -303,7 +438,8 @@ def gcs_to_social(event, context):
 
     # Idempotency: create posted/{video_id}.lock marker
     from caption_utils import _create_post_marker_or_skip, _load_json, _ensure_caption, _build_caption
-    if not _create_post_marker_or_skip(bucket, video_id):
+    marker_created = _create_post_marker_or_skip(bucket, video_id)
+    if not marker_created:
         print(f"[idempotency] marker exists for {video_id}; skipping post")
         return "", 200
     
@@ -311,6 +447,11 @@ def gcs_to_social(event, context):
         # Load metadata JSON
         meta = _load_json(bucket, blob_name)
         parts = _ensure_caption(meta)
+
+        # NEW: polish title/description/hashtags into broadcast style
+        parts = _polish_caption_with_ai(parts)
+
+        # (Optional) Build a single caption string for platforms that want it
         caption = _build_caption(parts)
 
         # Resolve video object path (same stem, .mp4)
@@ -319,54 +460,65 @@ def gcs_to_social(event, context):
         # Download video to temp
         local_path = _download_from_gcs(bucket, video_object)
 
-        # Post to Facebook (once only)
+        yt_video_id = None
+        yt_success = False
         fb_video_id = None
         fb_success = False
-        fb_page_id = _try_get_secret("FB_PAGE_ID")
-        fb_page_token = _try_get_secret("FB_PAGE_TOKEN")
-        if fb_page_id and fb_page_token:
-            print("\nFacebook token preflight...")
-            fb_info = _facebook_preflight(fb_page_token)
-            print(f"FB token valid: {fb_info['token_valid']} | Granted perms: {fb_info['perms']}")
-            if not fb_info['token_valid']:
-                print("❌ Facebook token is INVALID!")
-                print(f"   Error: {fb_info.get('error', 'Unknown error')}")
-                print("   Skipping Facebook upload.")
-            elif fb_info['missing_perms']:
-                print(f"⚠️ Missing required permissions: {fb_info['missing_perms']}")
-                print("   Upload may fail. Please regenerate token with all required scopes.")
-                delay = random.randint(10, 30)
-                print(f"\nWaiting {delay} seconds before Facebook upload...")
-                time.sleep(delay)
-                print("-"*60)
-                try:
-                    fb_video_id = _upload_facebook(local_path, parts["title"], parts["description"])
-                    fb_success = True
-                except Exception as fb_err:
-                    print(f"❌ Facebook upload failed: {fb_err}")
+
+        if marker_created:
+            # Post to YouTube (once only)
+            try:
+                yt_video_id = _upload_youtube(local_path, parts["title"], parts["description"], parts["hashtags"])
+                yt_success = True
+            except Exception as yt_err:
+                print(f"❌ YouTube upload failed: {yt_err}")
+
+            # Post to Facebook (once only)
+            fb_page_id = _try_get_secret("FB_PAGE_ID")
+            fb_page_token = _try_get_secret("FB_PAGE_TOKEN")
+            if fb_page_id and fb_page_token:
+                print("\nFacebook token preflight...")
+                fb_info = _facebook_preflight(fb_page_token)
+                print(f"FB token valid: {fb_info['token_valid']} | Granted perms: {fb_info['perms']}")
+                if not fb_info['token_valid']:
+                    print("❌ Facebook token is INVALID!")
+                    print(f"   Error: {fb_info.get('error', 'Unknown error')}")
+                    print("   Skipping Facebook upload.")
+                elif fb_info['missing_perms']:
+                    print(f"⚠️ Missing required permissions: {fb_info['missing_perms']}")
+                    print("   Upload may fail. Please regenerate token with all required scopes.")
+                    delay = random.randint(10, 30)
+                    print(f"\nWaiting {delay} seconds before Facebook upload.")
+                    time.sleep(delay)
+                    print("-"*60)
+                    try:
+                        fb_video_id = _upload_facebook(local_path, parts["title"], parts["description"])
+                        fb_success = True
+                    except Exception as fb_err:
+                        print(f"❌ Facebook upload failed: {fb_err}")
+                else:
+                    delay = random.randint(10, 30)
+                    print(f"\nWaiting {delay} seconds before Facebook upload.")
+                    time.sleep(delay)
+                    print("-"*60)
+                    try:
+                        fb_video_id = _upload_facebook(local_path, parts["title"], parts["description"])
+                        fb_success = True
+                    except Exception as fb_err:
+                        print(f"❌ Facebook upload failed: {fb_err}")
             else:
-                delay = random.randint(10, 30)
-                print(f"\nWaiting {delay} seconds before Facebook upload...")
-                time.sleep(delay)
-                print("-"*60)
-                try:
-                    fb_video_id = _upload_facebook(local_path, parts["title"], parts["description"])
-                    fb_success = True
-                except Exception as fb_err:
-                    print(f"❌ Facebook upload failed: {fb_err}")
-        else:
-            missing = []
-            if not fb_page_id:
-                missing.append("FB_PAGE_ID")
-            if not fb_page_token:
-                missing.append("FB_PAGE_TOKEN")
-            print(f"Skipping Facebook upload (missing secrets: {', '.join(missing)})")
+                missing = []
+                if not fb_page_id:
+                    missing.append("FB_PAGE_ID")
+                if not fb_page_token:
+                    missing.append("FB_PAGE_TOKEN")
+                print(f"Skipping Facebook upload (missing secrets: {', '.join(missing)})")
 
         # Clean up temp file
         os.remove(local_path)
 
         # Log posting status
-        marker_status = "created" if fb_success else "exists"
+        marker_status = "created" if marker_created else "exists"
         print(f"[posted] video_id={video_id} marker={marker_status} title={parts['title'][:80]!r}")
         return "", 200
 
