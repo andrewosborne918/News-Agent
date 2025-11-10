@@ -293,90 +293,64 @@ def gcs_to_social(event, context):
     print(f"Bucket: {bucket}")
     print(f"File: {blob_name}")
     
-    # Only process mp4 videos in the incoming/ folder
-    if not blob_name.startswith("incoming/"):
-        print(f"Skipping {blob_name} (not in incoming/ folder)")
-        return
-    if blob_name.endswith("/"):
-        print("Skipping directory marker")
-        return
-    if not blob_name.lower().endswith(".mp4"):
-        print(f"Skipping {blob_name} (not an .mp4 file)")
-        return
+    # Only process metadata JSON files
+    if not blob_name.endswith(".json"):
+        print(f"Ignoring non-json object: {blob_name}")
+        return "", 204
+
+    import os
+    video_id = os.path.splitext(os.path.basename(blob_name))[0]
+
+    # Idempotency: create posted/{video_id}.lock marker
+    from caption_utils import _create_post_marker_or_skip, _load_json, _ensure_caption, _build_caption
+    if not _create_post_marker_or_skip(bucket, video_id):
+        print(f"[idempotency] marker exists for {video_id}; skipping post")
+        return "", 200
     
     try:
-        # Download video from GCS
-        local_path = _download_from_gcs(bucket, blob_name)
+        # Load metadata JSON
+        meta = _load_json(bucket, blob_name)
+        parts = _ensure_caption(meta)
+        caption = _build_caption(parts)
 
-        # Derive metadata
-        title, description, tags = _derive_metadata(bucket, blob_name)
+        # Resolve video object path (same stem, .mp4)
+        video_object = f"{os.path.dirname(blob_name)}/{video_id}.mp4" if "/" in blob_name else f"{video_id}.mp4"
 
-        print(f"\nMetadata:")
-        print(f"  Title: {title}")
-        print(f"  Description: {description[:100]}...")
-        print(f"  Tags: {tags}")
+        # Download video to temp
+        local_path = _download_from_gcs(bucket, video_object)
 
-        # Upload to YouTube (gracefully handle upload limit exceeded)
-        print("\n" + "-"*60)
-        yt_video_id = None
-        yt_success = False
-        try:
-            yt_video_id = _upload_youtube(local_path, title, description, tags)
-            yt_success = True
-        except Exception as yt_err:
-            err_text = str(yt_err)
-            if "uploadLimitExceeded" in err_text or "exceeded the number of videos" in err_text or "YouTube upload limit exceeded" in err_text:
-                print("⚠️ YouTube daily upload limit exceeded.")
-                print("   Action needed:")
-                print("   1. Verify your YouTube channel (phone verification in YouTube Studio)")
-                print("   2. Wait 24 hours before uploading more videos")
-                print("   3. Consider rate-limiting uploads to avoid hitting this limit")
-                print("   Continuing with Facebook upload...")
-            else:
-                print(f"❌ YouTube upload error: {yt_err}")
-                print("   Continuing with Facebook upload...")
-
-        # Optionally upload to Facebook if secrets are present
+        # Post to Facebook (once only)
         fb_video_id = None
         fb_success = False
         fb_page_id = _try_get_secret("FB_PAGE_ID")
         fb_page_token = _try_get_secret("FB_PAGE_TOKEN")
         if fb_page_id and fb_page_token:
-            # Preflight token & permissions
             print("\nFacebook token preflight...")
             fb_info = _facebook_preflight(fb_page_token)
             print(f"FB token valid: {fb_info['token_valid']} | Granted perms: {fb_info['perms']}")
-            
             if not fb_info['token_valid']:
                 print("❌ Facebook token is INVALID!")
                 print(f"   Error: {fb_info.get('error', 'Unknown error')}")
-                print("   Action needed:")
-                print("   1. Generate a new long-lived User Access Token")
-                print("   2. Exchange it for a Page Access Token using:")
-                print("      curl 'https://graph.facebook.com/v19.0/me/accounts?access_token=YOUR_USER_TOKEN'")
-                print("   3. Update the FB_PAGE_TOKEN secret in Google Cloud Secret Manager")
                 print("   Skipping Facebook upload.")
             elif fb_info['missing_perms']:
                 print(f"⚠️ Missing required permissions: {fb_info['missing_perms']}")
                 print("   Upload may fail. Please regenerate token with all required scopes.")
-                # Try anyway, but warn
                 delay = random.randint(10, 30)
                 print(f"\nWaiting {delay} seconds before Facebook upload...")
                 time.sleep(delay)
                 print("-"*60)
                 try:
-                    fb_video_id = _upload_facebook(local_path, title, description)
+                    fb_video_id = _upload_facebook(local_path, parts["title"], parts["description"])
                     fb_success = True
                 except Exception as fb_err:
                     print(f"❌ Facebook upload failed: {fb_err}")
             else:
-                # Token is valid and has all permissions
                 delay = random.randint(10, 30)
                 print(f"\nWaiting {delay} seconds before Facebook upload...")
                 time.sleep(delay)
                 print("-"*60)
                 try:
-                    fb_video_id = _upload_facebook(local_path, title, description)
+                    fb_video_id = _upload_facebook(local_path, parts["title"], parts["description"])
                     fb_success = True
                 except Exception as fb_err:
                     print(f"❌ Facebook upload failed: {fb_err}")
@@ -387,45 +361,24 @@ def gcs_to_social(event, context):
             if not fb_page_token:
                 missing.append("FB_PAGE_TOKEN")
             print(f"Skipping Facebook upload (missing secrets: {', '.join(missing)})")
-        
+
         # Clean up temp file
         os.remove(local_path)
-        
-        # Log success
-        result = {
-            "status": "partial_success" if (yt_success or fb_success) and not (yt_success and fb_success) else ("success" if (yt_success and fb_success) else "failed"),
-            "youtube_success": yt_success,
-            "facebook_success": fb_success,
-            **({"youtube_video_id": yt_video_id, "youtube_url": f"https://youtube.com/shorts/{yt_video_id}"} if yt_video_id else {}),
-            **({"facebook_video_id": fb_video_id} if fb_video_id else {}),
-            "source_file": blob_name
-        }
-        
-        print("\n" + "="*60)
-        if result["status"] == "success":
-            print("✅ COMPLETE SUCCESS! (Both platforms)")
-        elif result["status"] == "partial_success":
-            print("⚠️ PARTIAL SUCCESS (at least one platform succeeded)")
-        else:
-            print("❌ BOTH PLATFORMS FAILED")
-        print("="*60)
-        print(json.dumps(result, indent=2))
-        
-        return result
-        
+
+        # Log posting status
+        marker_status = "created" if fb_success else "exists"
+        print(f"[posted] video_id={video_id} marker={marker_status} title={parts['title'][:80]!r}")
+        return "", 200
+
     except Exception as e:
         print("\n" + "="*60)
         print("❌ ERROR!")
         print("="*60)
         print(f"Error: {str(e)}")
-        
-        # Log error but don't raise (Cloud Functions will retry on exceptions)
         error_result = {
             "status": "error",
             "error": str(e),
             "source_file": blob_name
         }
         print(json.dumps(error_result, indent=2))
-        
-        # Re-raise to trigger Cloud Functions retry logic
         raise
