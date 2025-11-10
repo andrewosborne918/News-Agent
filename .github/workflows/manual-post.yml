@@ -1,34 +1,18 @@
 name: Manual Post to Social
 
 on:
-  workflow_dispatch:
-    inputs:
-      blob:
-        description: "Path to the JSON in the bucket (e.g., incoming/news_video_123.json)"
-        required: true
-      bucket:
-        description: "GCS bucket (defaults to your bucket)"
-        required: false
-        default: ""
+  workflow_dispatch: {}  # no inputs
 
 jobs:
   post:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate inputs
-        id: prep
+      - name: Trigger scheduled-post (auto-pick next JSON in queue)
+        env:
+          SCHEDULED_POST_URL: ${{ secrets.SCHEDULED_POST_URL }}
         run: |
-          if [ -z "${{ inputs.blob }}" ]; then
-            echo "Blob is required"; exit 1
-          fi
-          BKT="${{ inputs.bucket }}"
-          if [ -z "$BKT" ]; then BKT="${{ secrets.DEFAULT_BUCKET }}"; fi
-          echo "bucket=$BKT" >> $GITHUB_OUTPUT
-
-      - name: Trigger manual-post function
-        run: |
-          set -euo pipefail
-          curl -sS -X POST "${{ secrets.MANUAL_POST_URL }}" \
+          # Optional payload: {"max_scan": 5} limits how many objects the function scans
+          curl -sS -X POST "$SCHEDULED_POST_URL" \
             -H "Content-Type: application/json" \
-            -d "{\"bucket\":\"${{ steps.prep.outputs.bucket }}\",\"blob\":\"${{ inputs.blob }}\"}" \
-            | sed -e 's/^/CF: /'
+            -d '{"max_scan":5}' \
+            -w "\nHTTP %{http_code}\n"
