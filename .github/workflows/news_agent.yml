@@ -87,6 +87,14 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
+      - name: Show deployer SA email (debug)
+        run: |
+          python - <<'PY'
+          import json, os
+          p=os.environ.get('GOOGLE_APPLICATION_CREDENTIALS') or os.environ.get('GOOGLE_GHA_CREDS_PATH')
+          print("DEPLOYER_SA_EMAIL=" + json.load(open(p))['client_email'])
+          PY
+
       - name: Setup Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
@@ -150,8 +158,8 @@ jobs:
           cp uploader/main.py build/gcs-to-social/
           cp uploader/requirements.txt build/gcs-to-social/
           cp uploader/caption_utils.py build/gcs-to-social/
-          # If you have any helper dirs under uploader/, copy them too:
           [ -d uploader/utils ] && cp -r uploader/utils build/gcs-to-social/ || true
+
 
       - name: Deploy Cloud Function (gcs-to-social)
         run: |
