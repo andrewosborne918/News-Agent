@@ -147,10 +147,11 @@ jobs:
       - name: Build Cloud Function (gcs-to-social)
         run: |
           mkdir -p build/gcs-to-social
-          cp functions/gcs-to-social/main.py build/gcs-to-social/
-          cp functions/gcs-to-social/requirements.txt build/gcs-to-social/
-          cp functions/gcs-to-social/caption_utils.py build/gcs-to-social/
-          cd build/gcs-to-social && zip -r ../gcs-to-social.zip .
+          cp uploader/main.py build/gcs-to-social/
+          cp uploader/requirements.txt build/gcs-to-social/
+          cp uploader/caption_utils.py build/gcs-to-social/
+          # If you have any helper dirs under uploader/, copy them too:
+          [ -d uploader/utils ] && cp -r uploader/utils build/gcs-to-social/ || true
 
       - name: Deploy Cloud Function (gcs-to-social)
         run: |
@@ -162,6 +163,5 @@ jobs:
             --memory=1Gi \
             --timeout=540s \
             --retry \
-            --set-secrets=FACEBOOK_PAGE_TOKEN=FACEBOOK_PAGE_TOKEN:latest,YOUTUBE_CREDENTIALS_JSON=YOUTUBE_CREDENTIALS_JSON:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest \
+            --set-secrets=FACEBOOK_PAGE_TOKEN=FACEBOOK_PAGE_TOKEN:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_CREDENTIALS_JSON=YOUTUBE_CREDENTIALS_JSON:latest \
             --source=build/gcs-to-social
-
