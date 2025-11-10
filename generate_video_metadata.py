@@ -14,13 +14,23 @@ if not ts:
   sys.exit(1)
 
 caption_file = pathlib.Path("generated/caption.json")
+article_file = pathlib.Path("generated/article.json")
+
+# Get article title as a fallback
+article_title = "Daily Politics Update"
+if article_file.exists():
+    try:
+        article_data = json.loads(article_file.read_text(encoding="utf-8"))
+        article_title = article_data.get("title", article_title)
+    except (json.JSONDecodeError, KeyError):
+        pass
 
 # Try to parse as JSON first (from generate_caption.py)
 if caption_file.exists():
     try:
         caption_data = json.loads(caption_file.read_text(encoding="utf-8"))
         # Use the AI-generated title, description, and hashtags
-        title = caption_data.get("title", "Daily Politics Update")[:70]
+        title = caption_data.get("title", article_title)[:70]
         description = caption_data.get("description", "")[:4800]
         # Convert hashtags to tags (remove # symbol)
         hashtags = caption_data.get("hashtags", [])
@@ -30,12 +40,12 @@ if caption_file.exists():
         caption = caption_file.read_text(encoding="utf-8")
         raw = caption.strip()
         text = re.sub(r"\s+", " ", raw)
-        title = text[:70] or "Daily Politics Update"
+        title = text[:70] or article_title
         description = text[:4800]
         tags = ["news", "politics", "shorts", "breaking", "daily update"]
 else:
     # No caption file - use defaults
-    title = "Daily Politics Update"
+    title = article_title
     description = "Stay informed with our daily news shorts."
     tags = ["news", "politics", "shorts", "breaking", "daily update"]
 

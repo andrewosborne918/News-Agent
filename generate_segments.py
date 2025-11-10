@@ -24,6 +24,7 @@ import re
 import time
 import argparse
 import datetime as dt
+import json
 import random
 from typing import List, Tuple
 from urllib.parse import urlparse, urlunparse
@@ -46,6 +47,15 @@ try:
     import pexels_photos  # provides get_photo_for_question()
 except Exception:
     pexels_photos = None
+
+def save_article_data(url: str, title: str):
+    """Save the picked article's data to a JSON file for other scripts to use."""
+    data = {"url": url, "title": title}
+    output_path = "generated/article.json"
+    os.makedirs("generated", exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    print(f"✅ Article data saved to {output_path}")
 
 # ========================= Sentence utils =========================
 
@@ -458,6 +468,7 @@ def main():
             sys.exit("Could not pick a top story. Check NEWSDATA_API_KEY or adjust --country/--topic/--query.")
         url, title, published_at, score = picked
         print(f"[auto] Picked: {title} ({url}) score={score:.3f} published={published_at.isoformat()}Z")
+        save_article_data(url, title)
 
     if not url:
         sys.exit("No story URL provided. Use --auto or pass --story_url.")

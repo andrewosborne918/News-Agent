@@ -14,6 +14,18 @@ from pathlib import Path
 import google.generativeai as genai
 
 
+def load_article_data(data_dir="generated"):
+    """Load the article data from the generated JSON file."""
+    article_file = Path(data_dir) / "article.json"
+    if article_file.exists():
+        with open(article_file, 'r', encoding='utf-8') as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
 def load_segments_data(data_dir="generated"):
     """Load the text segments from the generated video."""
     data_dir = Path(data_dir)
@@ -29,25 +41,35 @@ def load_segments_data(data_dir="generated"):
     return segments
 
 
-def generate_caption_with_ai(segments, api_key):
+def generate_caption_with_ai(segments, api_key, article_data=None):
     """Use Gemini to generate a compelling caption from the video segments."""
     
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     # Combine segments into a summary
     content = "\n".join(segments)
     
+    # Add article context to the prompt if available
+    article_title = ""
+    if article_data and "title" in article_data:
+        article_title = article_data["title"]
+        prompt_context = f"The news commentary is about an article titled: '{article_title}'"
+    else:
+        prompt_context = "The news commentary is about a recent political event."
+
     prompt = f"""Analyze this political news commentary and create engaging social media content.
+
+{prompt_context}
 
 COMMENTARY:
 {content}
 
 Generate the following (be concise and punchy for social media):
 
-1. TITLE: A catchy, attention-grabbing headline (under 60 characters)
-2. DESCRIPTION: A compelling 2-3 sentence description that makes people want to watch
-3. HASHTAGS: 5-8 relevant, trending hashtags (mix of general and specific)
+1. TITLE: A catchy, attention-grabbing headline (under 60 characters) based on the commentary.
+2. DESCRIPTION: A compelling 2-3 sentence description that summarizes the key points and makes people want to watch.
+3. HASHTAGS: 5-8 relevant, trending hashtags (mix of general and specific to the topic).
 
 Format your response as JSON:
 {{
@@ -57,11 +79,11 @@ Format your response as JSON:
 }}
 
 Rules:
-- Title should be urgent and engaging
-- Description should hint at controversy or important developments
-- Include both trending political hashtags and evergreen news hashtags
-- No hashtag should have spaces (use camelCase if needed)
-- Make it shareable and clickable"""
+- Title should be urgent and engaging.
+- Description should hint at controversy or important developments.
+- Include both trending political hashtags and evergreen news hashtags.
+- No hashtag should have spaces (use camelCase if needed).
+- Make it shareable and clickable."""
 
     try:
         response = model.generate_content(prompt)
@@ -167,18 +189,21 @@ def main():
     print("📝 Generating caption from video content...")
     print(f"📂 Reading segments from: {data_dir}")
     
-    # Load segments
+    # Load segments and article data
     segments = load_segments_data(data_dir)
+    article_data = load_article_data(data_dir)
     
     if not segments:
         print("❌ No segments found. Make sure video has been generated.")
         sys.exit(1)
     
     print(f"✅ Loaded {len(segments)} segments")
+    if article_data:
+        print(f"✅ Loaded article data: {article_data['title']}")
     
     # Generate caption with AI
     print("🤖 Generating caption with AI...")
-    caption_data = generate_caption_with_ai(segments, api_key)
+    caption_data = generate_caption_with_ai(segments, api_key, article_data)
     
     # Display results
     print("\n" + "="*60)
