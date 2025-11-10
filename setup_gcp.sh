@@ -8,9 +8,9 @@ echo "============================================================"
 echo "GCP News Automation Setup"
 echo "============================================================"
 
-# Get project ID
-read -p "Enter your GCP Project ID: " PROJECT_ID
-gcloud config set project $PROJECT_ID
+# Set project ID from your service account
+PROJECT_ID="news-automation-477419"
+gcloud config set project "$PROJECT_ID"
 
 echo ""
 echo "============================================================"
@@ -31,7 +31,7 @@ echo "============================================================"
 echo "Step 2: Creating Storage Bucket..."
 echo "============================================================"
 
-BUCKET="news-videos-$RANDOM"
+BUCKET="news-videos-$(date +%s)"
 gsutil mb -l us-central1 gs://$BUCKET
 
 echo "✅ Bucket created: gs://$BUCKET"
@@ -47,11 +47,11 @@ gcloud iam service-accounts create gh-actions-uploader \
 
 # Grant bucket-level permissions required for uploads
 gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
-  --member="serviceAccount:gh-actions-uploader@$PROJECT_ID.iam.gserviceaccount.com" \
+  --member="serviceAccount:gh-actions-uploader@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/storage.objectCreator"
 
 gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
-  --member="serviceAccount:gh-actions-uploader@$PROJECT_ID.iam.gserviceaccount.com" \
+  --member="serviceAccount:gh-actions-uploader@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/storage.objectViewer"
 
 gcloud iam service-accounts keys create gh-actions.json \
