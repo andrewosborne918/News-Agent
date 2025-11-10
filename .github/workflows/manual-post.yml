@@ -1,0 +1,34 @@
+name: Manual Post to Social
+
+on:
+  workflow_dispatch:
+    inputs:
+      blob:
+        description: "Path to the JSON in the bucket (e.g., incoming/news_video_123.json)"
+        required: true
+      bucket:
+        description: "GCS bucket (defaults to your bucket)"
+        required: false
+        default: ""
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        id: prep
+        run: |
+          if [ -z "${{ inputs.blob }}" ]; then
+            echo "Blob is required"; exit 1
+          fi
+          BKT="${{ inputs.bucket }}"
+          if [ -z "$BKT" ]; then BKT="${{ secrets.DEFAULT_BUCKET }}"; fi
+          echo "bucket=$BKT" >> $GITHUB_OUTPUT
+
+      - name: Trigger manual-post function
+        run: |
+          set -euo pipefail
+          curl -sS -X POST "${{ secrets.MANUAL_POST_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"bucket\":\"${{ steps.prep.outputs.bucket }}\",\"blob\":\"${{ inputs.blob }}\"}" \
+            | sed -e 's/^/CF: /'

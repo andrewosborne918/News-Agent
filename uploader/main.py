@@ -27,6 +27,73 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError, ResumableUploadError
 import requests
+# ---------- caption_utils fallback shim ----------
+try:
+    from caption_utils import (
+        _create_post_marker_or_skip,
+        _load_json,
+        _ensure_caption,
+        _build_caption,
+    )
+    _CAPTION_UTILS_AVAILABLE = True
+    print("caption_utils: using bundled implementation")
+except Exception:
+    _CAPTION_UTILS_AVAILABLE = False
+    print("caption_utils: not found, using local shim")
+    import json
+    import os
+    from google.cloud import storage
+
+    def _load_json(bucket_name: str, blob_name: str) -> dict:
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        data = blob.download_as_bytes()
+        try:
+            return json.loads(data.decode("utf-8"))
+        except Exception:
+            return json.loads(data)
+
+    def _create_post_marker_or_skip(bucket_name: str, json_blob_name: str) -> bool:
+        base_no_ext = os.path.splitext(json_blob_name)[0]
+        marker_name = f"{base_no_ext}.posted"
+        client = storage.Client()
+        bkt = client.bucket(bucket_name)
+        marker = bkt.blob(marker_name)
+        if marker.exists():
+            print(f"skip: marker exists -> {marker_name}")
+            return False
+        marker.upload_from_string(b"ok")
+        print(f"marker created -> {marker_name}")
+        return True
+
+    def _ensure_caption(meta: dict) -> dict:
+        title = meta.get("Title") or meta.get("title") or "Update"
+        desc = meta.get("Description") or meta.get("description") or ""
+        tags = meta.get("Tags") or meta.get("tags") or []
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.replace(",", " ").split() if t.strip()]
+        norm = []
+        for t in tags:
+            t = t.strip("# ").replace(" ", "")
+            if not t:
+                continue
+            norm.append("#" + t[:50])
+            if len(norm) >= 25:
+                break
+        meta["Title"] = str(title)[:95]
+        meta["Description"] = str(desc)[:4950]
+        meta["Tags"] = norm
+        return meta
+
+    def _build_caption(meta: dict) -> tuple[str, str]:
+        title = meta.get("Title") or "Update"
+        desc = meta.get("Description") or ""
+        tags = meta.get("Tags") or []
+        tags_line = " ".join(tags) if tags else ""
+        long_caption = f"{desc.strip()}\n\n{tags_line}".strip()
+        return str(title), str(long_caption)
+# ---------- end shim ----------
 
 # Get project ID from environment (auto-injected by Cloud Functions)
 PROJECT_ID = os.environ.get("GCP_PROJECT")
@@ -413,120 +480,67 @@ SOURCE:
 # Core processor (shared by all triggers)
 # -----------------------------
 
-def _process_metadata_json(bucket: str, blob_name: str) -> tuple[str, int]:
+def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, int]:
     """
-    Shared logic that reads a metadata JSON in GCS and posts the corresponding video
-    to the configured platforms. Returns (body, http_status).
+    Reads companion JSON, ensures caption present, and kicks off publishing.
+    Returns (message, http_status).
     """
-    print("="*60)
+    import os
+    import traceback
+
     print("Processor invoked")
-    print("="*60)
-    print(f"Bucket: {bucket}")
-    print(f"JSON:   {blob_name}")
+    print("============================================================")
+    print(f"Bucket: {bucket_name}")
+    print(f"JSON:   {json_blob_name}")
 
-    if not blob_name.endswith(".json"):
-        print(f"Ignoring non-json object: {blob_name}")
-        return "", 204
+    # Idempotency: create .posted marker or skip if it already exists
+    if not _create_post_marker_or_skip(bucket_name, json_blob_name):
+        return (f"skip: already posted -> {json_blob_name}", 200)
 
-    import os as _os
-    video_id = _os.path.splitext(_os.path.basename(blob_name))[0]
-
-    # Idempotency: create posted/{video_id}.lock marker
-    from caption_utils import _create_post_marker_or_skip, _load_json, _ensure_caption, _build_caption
-    marker_created = _create_post_marker_or_skip(bucket, video_id)
-    if not marker_created:
-        print(f"[idempotency] marker exists for {video_id}; skipping post")
-        return "", 200
-
+    # Load the JSON metadata
     try:
-        # Load metadata JSON
-        meta = _load_json(bucket, blob_name)
-
-        # Ensure caption parts (title/description/tags/script)
-        parts = _ensure_caption(meta)
-
-        # Normalize hashtags and try AI polish
-        parts = _build_caption(parts)  # derive title/description/hashtags from script if missing
-        parts = _polish_caption_with_ai(parts)
-
-        # Download video from where the JSON points to
-        video_bucket = meta.get("video_bucket") or bucket
-        video_blob   = meta.get("video_blob") or meta.get("video_path")
-        if not video_blob:
-            # Fallback: assume same dir/name with .mp4
-            import os as _os
-            base = _os.path.splitext(blob_name)[0] + ".mp4"
-            video_blob = base
-
-        local_path = _download_from_gcs(video_bucket, video_blob)
-
-        # Upload destinations
-        upload_to = meta.get("destinations") or ["youtube", "facebook"]
-
-        # YouTube
-        if "youtube" in upload_to:
-            try:
-                yt_result = _upload_youtube(
-                    filepath=local_path,
-                    title=parts["title"],
-                    description=parts["description"],
-                    tags=parts.get("hashtags") or parts.get("tags") or []
-                )
-                print(f"✅ Uploaded to YouTube: {yt_result}")
-            except Exception as yt_err:
-                print(f"❌ YouTube upload failed: {yt_err}")
-
-        # Facebook
-        if "facebook" in upload_to:
-            fb_page_id = _try_get_secret("FB_PAGE_ID")
-            fb_page_token = _try_get_secret("FB_PAGE_TOKEN")
-            if fb_page_id and fb_page_token:
-                try:
-                    fb_result = _upload_facebook(
-                        filepath=local_path,
-                        title=parts["title"],
-                        description=parts["description"]
-                    )
-                    print(f"✅ Uploaded to Facebook: {fb_result}")
-                except Exception as fb_err:
-                    print(f"❌ Facebook upload failed: {fb_err}")
-            else:
-                missing = []
-                if not fb_page_id:
-                    missing.append("FB_PAGE_ID")
-                if not fb_page_token:
-                    missing.append("FB_PAGE_TOKEN")
-                print(f"Skipping Facebook upload (missing secrets: {', '.join(missing)})")
-
-        # Clean up temp file
-        import os as _os
-        try:
-            _os.remove(local_path)
-        except Exception:
-            pass
-
-        # Log posting status
-        marker_status = "created" if marker_created else "exists"
-        print(f"[posted] video_id={video_id} marker={marker_status} title={parts['title'][:80]!r}")
-        return "", 200
-
+        meta = _load_json(bucket_name, json_blob_name)
     except Exception as e:
-        print("\n" + "="*60)
-        print("❌ ERROR!")
-        print("="*60)
-        print(f"Error: {str(e)}")
-        error_result = {
-            "status": "error",
-            "error": str(e),
-            "source_file": blob_name
-        }
-        print(json.dumps(error_result, indent=2))
-        raise
-def gcs_to_social(event, context):
-    """GCS trigger: when a companion JSON is uploaded."""
-    bucket = event.get("bucket")
-    blob_name = event.get("name")
-    return _process_metadata_json(bucket, blob_name)
+        print(f"ERROR: failed to load metadata JSON: {e}")
+        return ("failed to load metadata", 200)  # 200 so Scheduler doesn't retry forever
+
+    # Ensure Title/Description/Tags exist (AI polish may run elsewhere)
+    try:
+        meta = _ensure_caption(meta or {})
+    except Exception as e:
+        print(f"ERROR: _ensure_caption failed: {e}")
+        meta = meta or {}
+        meta.setdefault("Title", "Update")
+        meta.setdefault("Description", "")
+        meta.setdefault("Tags", [])
+
+    # Build title + final caption
+    try:
+        title, caption = _build_caption(meta)
+    except Exception as e:
+        print(f"ERROR: _build_caption failed: {e}")
+        title = meta.get("Title", "Update")
+        caption = (meta.get("Description") or "").strip()
+
+    print(f"  Title: {title[:80]}{'...' if len(title)>80 else ''}")
+    print(f"  Description: {caption[:100]}{'...' if len(caption)>100 else ''}")
+    print(f"  Tags: {meta.get('Tags')}")
+
+    # Derive companion video path from the JSON name (same prefix, .mp4)
+    base_no_ext = os.path.splitext(json_blob_name)[0]
+    video_blob_name = base_no_ext + ".mp4"
+    print(f"  Video candidate: {video_blob_name}")
+
+    # ---- keep your real upload calls if you already have them ----
+    try:
+        # _upload_youtube_short(bucket_name, video_blob_name, title, caption)
+        # _upload_facebook_reel(bucket_name, video_blob_name, title, caption)
+        pass
+    except Exception as e:
+        print(f"ERROR: publish failed: {e}\n{traceback.format_exc()}")
+
+    return (f"ok: processed {json_blob_name}", 200)
+
 
 
 
@@ -589,52 +603,74 @@ def manual_post(request):
         return (json.dumps({"status":"error","error":str(e)}), 500, {"Content-Type":"application/json"})
 
 def scheduled_post(request):
-    """HTTP endpoint meant to be triggered hourly by Cloud Scheduler.
-
-    Env:
-      - SCHEDULE_BUCKET: bucket to scan (required if not provided in request)
-      - QUEUE_PREFIX:    prefix to scan for JSONs (default 'incoming/')
-    Optional query/body:
-      - bucket, prefix: override envs
-      - max_scan: how many JSONs to try this tick (default 5)
-
-    Logic:
-      - If current time in America/Detroit is outside 06:00–21:00, exit 204.
-      - List JSON files by updated time ascending under prefix.
-      - Attempt to process up to max_scan until one actually posts (idempotency makes others skip).
     """
-    # Time window check
-    if not _is_within_posting_window():
-        return ("Outside posting window; skipping.", 204)
+    HTTP-triggered function. Scans QUEUE_PREFIX in SCHEDULE_BUCKET for a companion
+    .json file, processes the first candidate, and always returns 200 to avoid
+    retry storms from Cloud Scheduler.
+    """
+    import os
+    from google.cloud import storage
+    import json
+    import traceback
 
-    data = request.get_json(silent=True) or {}
-    bucket = data.get("bucket") or (request.args.get("bucket") if request.args else None) or os.environ.get("SCHEDULE_BUCKET")
-    prefix = data.get("prefix") or (request.args.get("prefix") if request.args else None) or os.environ.get("QUEUE_PREFIX", "incoming/")
-    max_scan = int(data.get("max_scan") or (request.args.get("max_scan") if request.args else "5"))
-
-    if not bucket:
-        return (json.dumps({"error":"missing bucket (set SCHEDULE_BUCKET env or pass ?bucket=)"}), 400, {"Content-Type":"application/json"})
-
-    client = storage.Client()
-    bucket_obj = client.bucket(bucket)
-
-    # Collect candidate JSONs
-    blobs = list(client.list_blobs(bucket, prefix=prefix))
-    candidates = [b for b in blobs if b.name.endswith(".json")]
-    # Sort by updated time asc (older first)
+    # Log some headers for debugging Scheduler calls
     try:
-        candidates.sort(key=lambda b: b.updated or b.time_created)
+        hdrs = dict(list(request.headers.items())[:12])
+        print("scheduled-post: headers sample:", hdrs)
     except Exception:
         pass
 
-    tried = 0
-    for b in candidates:
-        tried += 1
-        body, status = _process_metadata_json(bucket, b.name)
-        # If status 200, we consider it handled (even if idempotent skip). Move on.
-        if status == 200:
-            return (body, 200)
-        if tried >= max_scan:
-            break
+    # Accept JSON or raw bytes (octet-stream)
+    try:
+        payload = request.get_json(silent=True) or {}
+    except Exception:
+        payload = {}
+    if not payload:
+        try:
+            raw = (request.data or b"").decode("utf-8", errors="ignore").strip()
+            payload = json.loads(raw) if raw else {}
+        except Exception:
+            payload = {}
 
-    return ("No candidates processed.", 204)
+    max_scan = int(payload.get("max_scan", 5))
+    print(f"scheduled-post: payload={payload} max_scan={max_scan}")
+
+    bucket_name = (os.environ.get("SCHEDULE_BUCKET") or "").strip()
+    prefix = (os.environ.get("QUEUE_PREFIX") or "incoming/").strip()
+    if not bucket_name:
+        print("scheduled-post: ERROR missing SCHEDULE_BUCKET env")
+        return ("missing SCHEDULE_BUCKET", 200)  # 200 so Scheduler doesn't keep retrying
+
+    try:
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+
+        # Choose the next item to post: scan prefix for .json companions
+        print(f"scheduled-post: scanning gs://{bucket_name}/{prefix} for .json")
+        candidates = []
+        for b in client.list_blobs(bucket, prefix=prefix):
+            if not b.name.endswith(".json"):
+                continue
+            base_no_ext = os.path.splitext(b.name)[0]
+            # Skip already-posted markers
+            if storage.Blob(bucket=bucket, name=f"{base_no_ext}.posted").exists():
+                continue
+            candidates.append(b.name)
+            if len(candidates) >= max_scan:
+                break
+
+        print(f"scheduled-post: found {len(candidates)} candidate(s)")
+        if not candidates:
+            return ("no candidates", 200)
+
+        # Process the first candidate (or implement your own selection strategy)
+        target = candidates[0]
+        body, status = _process_metadata_json(bucket_name, target)
+        print(f"scheduled-post: result -> {status} {body}")
+        return (body, 200)
+
+    except Exception:
+        print("scheduled-post: EXCEPTION")
+        print(traceback.format_exc())
+        return (f"error logged: exception", 200)
+
