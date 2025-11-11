@@ -1,9 +1,15 @@
 # caption_utils.py
 import json
 import os
-from typing import Dict, List
-from google.cloud import storage
-from google.api_core.exceptions import Conflict, PreconditionFailed
+from typing import Dict, List, Tuple, Optional
+
+# Optional: only used if you call _load_json()
+try:
+    from google.cloud import storage
+except Exception:
+    storage = None  # keeps module import-safe on local runs
+
+from google.api_core.exceptions import Conflict, PreconditionFailed  # noqa: F401 (kept for parity)
 
 # ---------------------------------------------------------------------------
 # Gemini setup (prefers new google-genai SDK, falls back to google-generativeai)
@@ -46,7 +52,7 @@ def _rewrite_caption(text: str, limit: int = 150) -> str:
         )
         if _use_new_sdk and _client:
             resp = _client.models.generate_content(model=_GEMINI_MODEL_NAME, contents=prompt)
-            return (resp.text or "").strip() or text
+            return (getattr(resp, "text", "") or "").strip() or text
         elif _legacy_model:
             resp = _legacy_model.generate_content(prompt)
             return (getattr(resp, "text", "") or "").strip() or text
@@ -61,14 +67,16 @@ def _rewrite_caption(text: str, limit: int = 150) -> str:
 try:
     from generate_caption import generate_caption_with_ai  # type: ignore
 except Exception:
-    generate_caption_with_ai = None
+    generate_caption_with_ai = None  # type: ignore
 
 # ---------------------------------------------------------------------------
-# GCS utilities
+# (Optional) GCS utilities
 # ---------------------------------------------------------------------------
 
 def _load_json(bucket_name: str, name: str) -> Dict:
     """Load a JSON blob from GCS."""
+    if storage is None:
+        raise RuntimeError("google-cloud-storage not available in this environment")
     client = storage.Client()
     blob = client.bucket(bucket_name).blob(name)
     return json.loads(blob.download_as_text())
@@ -90,37 +98,65 @@ def _looks_generic(text: str) -> bool:
     return any(t.startswith(gs) for gs in generic_starts)
 
 def _normalize_hashtags(hashtags: List[str]) -> List[str]:
-    """Normalize and deduplicate hashtags."""
+    """Normalize and deduplicate hashtags to #CamelCaseNoSpaces style."""
     seen = set()
     out: List[str] = []
     for h in hashtags or []:
         h = (h or "").strip()
         if not h:
             continue
-        if not h.startswith("#"):
-            h = "#" + h.replace(" ", "")
-        if h not in seen:
-            seen.add(h)
-            out.append(h)
+        # Strip leading '#', remove spaces, keep alnum/underscore mostly intact
+        core = h.lstrip("#").replace(" ", "")
+        if not core:
+            continue
+        tag = f"#{core}"
+        if tag not in seen:
+            seen.add(tag)
+            out.append(tag)
     return out
 
+def _coerce_hashtag_list(value) -> List[str]:
+    """Accept list or comma/space-separated string; return list[str]."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        # flatten simple scalar-like entries
+        return [str(v).strip() for v in value if str(v).strip()]
+    # treat as string
+    s = str(value)
+    # allow commas or whitespace as separators
+    parts = [p.strip() for p in s.replace(",", " ").split() if p.strip()]
+    return parts
+
 # ---------------------------------------------------------------------------
-# Core caption ensuring logic
+# Core derivation pipeline (single source of truth)
 # ---------------------------------------------------------------------------
 
-def _ensure_caption(meta: Dict) -> Dict:
+def _derive_title_desc_tags(meta: Dict) -> Tuple[str, str, List[str]]:
     """
-    Ensures meta has 'title', 'description', and 'hashtags'.
-    Uses transcript/summary/text as fallback and optionally calls Gemini.
+    Produce (title, description, hashtags_list) using meta + AI when helpful.
+    Never returns None; always returns strings and list.
     """
-    title = (meta.get("title") or "").strip()
-    description = (meta.get("description") or "").strip()
-    hashtags = meta.get("hashtags") or []
+    title = (meta.get("title") or meta.get("Title") or "").strip()
+    description = (meta.get("description") or meta.get("Description") or "").strip()
+    hashtags_raw = meta.get("hashtags") or meta.get("tags") or []
+    hashtags_list = _coerce_hashtag_list(hashtags_raw)
 
-    source = (meta.get("transcript") or meta.get("summary") or meta.get("text") or "").strip()
-    needs_ai = _looks_generic(title) or _looks_generic(description) or not hashtags
+    # Pick a source text for AI: transcript > summary > text > description > title
+    source = (
+        meta.get("transcript")
+        or meta.get("summary")
+        or meta.get("text")
+        or description
+        or title
+        or ""
+    )
+    source = str(source).strip()
+
+    needs_ai = _looks_generic(title) or _looks_generic(description) or not hashtags_list
 
     if needs_ai:
+        # Prefer user's AI generator if present
         if generate_caption_with_ai and source:
             try:
                 ai = generate_caption_with_ai([source], os.getenv("GEMINI_API_KEY"))
@@ -130,85 +166,67 @@ def _ensure_caption(meta: Dict) -> Dict:
             if ai:
                 title = (ai.get("title") or title or "").strip()
                 description = (ai.get("description") or description or "").strip()
-                hashtags = ai.get("hashtags") or hashtags or []
+                hashtags_list = _coerce_hashtag_list(ai.get("hashtags") or hashtags_list)
         else:
-            # Use Gemini rewrite for minimal polishing
+            # Minimal Gemini polish for existing text, or synthesize from source
             if title:
                 title = _rewrite_caption(title, limit=100)
             elif source:
-                title = _rewrite_caption(source.split(".")[0][:100], limit=100)
+                title = _rewrite_caption(source.split(".")[0][:100], limit=100)  # first sentence-ish
 
             if description:
                 description = _rewrite_caption(description, limit=260)
             elif source:
                 description = _rewrite_caption(source[:260], limit=260)
 
-            if not hashtags:
-                hashtags = ["RightSideReport", "Politics"]
+            if not hashtags_list:
+                hashtags_list = ["RightSideReport", "Politics"]
 
-    tags = _normalize_hashtags(hashtags)
-    return {"title": title, "description": description, "hashtags": tags}
+    hashtags = _normalize_hashtags(hashtags_list)
+    if not title:
+        title = "Update"
+    return title, description, hashtags
+
+def _compose_caption_text(title: str, description: str, hashtags: List[str]) -> str:
+    """Join pieces into a final social caption text."""
+    parts: List[str] = []
+    if title:
+        parts.append(title)
+    if description:
+        parts.append(description)
+    if hashtags:
+        parts.append(" ".join(hashtags))
+    return "\n\n".join(parts).strip()
 
 # ---------------------------------------------------------------------------
-# Caption building and idempotency utilities
+# Public APIs (use these from other modules)
 # ---------------------------------------------------------------------------
 
-def _build_caption(parts: Dict) -> Dict:
-    """Build a final caption string."""
-    title = (parts.get("title") or "").strip()
-    desc = (parts.get("description") or "").strip()
-    tags = " ".join(parts.get("hashtags") or [])
-    body = "\n\n".join(x for x in [title, desc, tags] if x).strip()
-    return body
-
-
-def _build_caption(parts: Dict) -> Dict:
+def build_title_and_caption(meta: Dict) -> Tuple[str, str]:
     """
-    Normalize and enrich caption metadata.
-    Returns a dict with:
+    Canonical function for callers.
+    Always returns exactly (title, caption).
+    """
+    title, description, hashtags = _derive_title_desc_tags(meta)
+    caption = _compose_caption_text(title, description, hashtags)
+    return title, caption
+
+def ensure_caption_dict(meta: Dict) -> Dict:
+    """
+    Return normalized caption fields:
         {
           "title": str,
           "description": str,
-          "hashtags": List[str],
-          "script": Optional[str]
+          "hashtags": List[str]
         }
     """
-
-    title = (parts.get("title") or parts.get("Title") or "Update").strip()
-    description = (parts.get("description") or parts.get("Description") or "").strip()
-    script = (parts.get("script") or parts.get("narration") or "").strip()
-    hashtags = parts.get("hashtags") or parts.get("tags") or []
-
-    # Build a single caption text if description is missing
-    if not description:
-        caption_lines = [title]
-        if script:
-            caption_lines.append(script)
-        if hashtags:
-            caption_lines.append(" ".join(f"#{h.strip().lstrip('#')}" for h in hashtags))
-        description = "\n\n".join(caption_lines)
-
-    # Normalize hashtags
-    normalized_tags = [f"#{t.strip().lstrip('#')}" for t in hashtags if t.strip()]
-
-    # Return a unified dict (what main.py expects)
-    return {
-        "title": title,
-        "description": description,
-        "hashtags": normalized_tags,
-        "script": script,
-    }
-
-
-
-# ---------------------------------------------------------------------------
-# Convenience wrappers
-# ---------------------------------------------------------------------------
+    title, description, hashtags = _derive_title_desc_tags(meta)
+    return {"title": title, "description": description, "hashtags": hashtags}
 
 def ensure_and_build_caption(meta: Dict) -> str:
-    """Return a final caption string after ensuring and cleaning fields."""
-    return _build_caption(_ensure_caption(meta))
-
-def ensure_caption_dict(meta: Dict) -> Dict:
-    """Return the normalized caption dictionary."""
-    return _ensure_caption(meta)
+    """
+    Legacy convenience: returns final caption text.
+    Prefer build_title_and_caption() in new code.
+    """
+    title, description, hashtags = _derive_title_desc_tags(meta)
+    return _compose_caption_text(title, description, hashtags)

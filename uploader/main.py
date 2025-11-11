@@ -33,7 +33,7 @@ import requests
 
 # -------- caption_utils fallback shim --------
 try:
-    from caption_utils import (
+    from uploader.caption_utils import build_title_and_caption
         _create_post_marker_or_skip,
         _load_json,
         _ensure_caption,
@@ -96,14 +96,6 @@ except Exception as e:
         meta["Description"] = str(desc)[:4950]
         meta["Tags"] = norm
         return meta
-
-    def _build_caption(meta: dict) -> tuple[str, str]:
-        title = meta.get("Title") or "Update"
-        desc = meta.get("Description") or ""
-        tags = meta.get("Tags") or []
-        tags_line = " ".join(tags) if tags else ""
-        long_caption = f"{desc.strip()}\n\n{tags_line}".strip()
-        return str(title), str(long_caption)
 # ---------- end shim ----------
 
 # Get project ID from environment (auto-injected by Cloud Functions)
@@ -552,7 +544,18 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         title = (meta.get("title") or meta.get("Title") or "Update").strip()
         description = (meta.get("description") or meta.get("Description") or "").strip()
         tags = meta.get("hashtags") or meta.get("Tags") or []
-        caption = _build_caption({"title": title, "description": description, "hashtags": tags})
+    meta = {"title": title, "description": description, "hashtags": tags}
+    title, caption = build_title_and_caption(meta)
+    logger.info(f"_build_caption type: {type(title).__name__},{type(caption).__name__}")
+
+    # Idempotency marker: processed_markers/{json_blob_name}.done
+    storage_client = storage.Client()
+    marker_name = f"processed_markers/{json_blob_name}.done"
+    bucket = storage_client.bucket(bucket_name)
+    marker_blob = bucket.blob(marker_name)
+    if marker_blob.exists():
+        logger.info("Already processed, skipping.")
+        return (f"already processed: {json_blob_name}", 200)
     except Exception as e:
         print(f"ERROR: _build_caption failed: {e}")
         title = (meta.get("title") or meta.get("Title") or "Update").strip()
@@ -592,6 +595,11 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         except Exception:
             pass
 
+    # On success, upload marker
+    try:
+        marker_blob.upload_from_string("ok")
+    except Exception as e:
+        logger.warning(f"Failed to write processed marker: {e}")
     return (f"ok: processed {json_blob_name}", 200)
 
 
