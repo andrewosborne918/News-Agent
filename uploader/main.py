@@ -19,6 +19,9 @@ import time
 import random
 import json
 from typing import Dict, Any, List, Tuple
+import functions_framework
+from cloudevents.http import CloudEvent
+
 
 from google.cloud import storage, secretmanager
 from google.api_core.exceptions import NotFound
@@ -541,6 +544,32 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
 
     return (f"ok: processed {json_blob_name}", 200)
 
+
+# -----------------------------
+# GCS -> Social entry point (CloudEvent)
+# -----------------------------
+
+@functions_framework.cloud_event
+def gcs_to_social(event: CloudEvent):
+    """
+    Cloud Functions v2 (GCS trigger). When a new object lands in the bucket,
+    we process the companion .json and publish. Non-JSON objects are ignored.
+    """
+    data = event.data or {}
+    bucket = data.get("bucket")
+    name = data.get("name")
+
+    if not bucket or not name:
+        print("[skip] missing bucket/name in event")
+        return
+
+    # Only process the metadata JSON; mp4 uploads will be ignored
+    if not name.lower().endswith(".json"):
+        print(f"Ignoring non-json object: {name}")
+        return
+
+    # Delegate to your existing processor
+    return _process_metadata_json(bucket, name)
 
 
 
