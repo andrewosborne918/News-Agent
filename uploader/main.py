@@ -553,13 +553,18 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
     video_blob_name = base_no_ext + ".mp4"
     print(f"  Video candidate: {video_blob_name}")
 
-    # ---- your real upload calls here ----
+        # ---- do the uploads ----
     try:
-        # _upload_youtube(bucket_name, video_blob_name, title, caption)
-        # _upload_facebook(bucket_name, video_blob_name, title, caption)
-        pass
+        print("[youtube] uploading…")
+        _upload_youtube(bucket_name, video_blob_name, title, caption)
+        print("[youtube] done")
+
+        print("[facebook] uploading…")
+        _upload_facebook(bucket_name, video_blob_name, title, caption)
+        print("[facebook] done")
     except Exception as e:
         print(f"ERROR: publish failed: {e}\n{traceback.format_exc()}")
+
 
     return (f"ok: processed {json_blob_name}", 200)
 
