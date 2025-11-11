@@ -168,6 +168,26 @@ jobs:
           cp uploader/caption_utils.py build/gcs-to-social/
           [ -d uploader/utils ] && cp -r uploader/utils build/gcs-to-social/ || true
 
+      - name: Prepare clean function build
+        run: |
+          rm -rf build/gcs-to-social
+          mkdir -p build/gcs-to-social
+          cp uploader/main.py build/gcs-to-social/
+          cp uploader/requirements.txt build/gcs-to-social/
+          cp uploader/caption_utils.py build/gcs-to-social/
+          [ -d uploader/utils ] && cp -r uploader/utils build/gcs-to-social/ || true
+
+      - name: Verify no tuple-unpack remains
+        run: |
+          if grep -R --line-number "title, *caption *= *_build_caption" build/gcs-to-social; then
+            echo "ERROR: found legacy 'title, caption = _build_caption(...)' usage"
+            exit 1
+          fi
+          echo "OK: no legacy tuple-unpack found."
+          echo "--- main.py excerpt ---"
+          sed -n '1,160p' build/gcs-to-social/main.py
+          echo "--- caption_utils.py excerpt ---"
+          sed -n '1,160p' build/gcs-to-social/caption_utils.py
 
       - name: Deploy Cloud Function (gcs-to-social)
         run: |

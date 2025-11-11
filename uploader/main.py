@@ -560,6 +560,7 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         tags = meta.get("hashtags") or meta.get("Tags") or []
         caption = description  # safe fallback
 
+    print(f"  _build_caption type: {type(caption).__name__}, length: {len(caption)}")
     print(f"  Title: {title[:80]}{'...' if len(title) > 80 else ''}")
     print(f"  Description: {caption[:100]}{'...' if len(caption) > 100 else ''}")
     print(f"  Tags: {tags}")
@@ -601,33 +602,21 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
 # -----------------------------
 
 @functions_framework.cloud_event
-def gcs_to_social(event: CloudEvent):
-    """
-    Cloud Functions v2 (GCS trigger). When a new object lands in the bucket,
-    we process the companion .json and publish. Non-JSON objects are ignored.
-    """
+def gcs_to_social(event):
     data = event.data or {}
     bucket = data.get("bucket")
     name = data.get("name")
-
     if not bucket or not name:
-        print("[skip] missing bucket/name in event")
-        return
-
+        print("No bucket/name in event; ignoring"); return
     if not name.startswith("incoming/"):
-        print(f"Ignoring object outside incoming/: {name}")
-        return
-
+        print(f"Ignoring object outside incoming/: {name}"); return
     if not name.lower().endswith(".json"):
-        print(f"Ignoring non-json object: {name}")
-        return
-
+        print(f"Ignoring non-json object: {name}"); return
     print("============================================================")
     print("Processor invoked")
     print("============================================================")
     print(f"Bucket: {bucket}")
     print(f"JSON:   {name}")
-
     body, status = _process_metadata_json(bucket, name)
     print(body)
 
