@@ -161,8 +161,9 @@ def _build_caption(parts: Dict) -> str:
     body = "\n\n".join(x for x in [title, desc, tags] if x).strip()
     return body
 
+from google.api_core.exceptions import Conflict, PreconditionFailed
+
 def _create_post_marker_or_skip(bucket_name: str, video_id: str) -> bool:
-    """Create an idempotency marker in GCS to prevent duplicate posting."""
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
     marker_key = f"posted/{video_id}.lock"
@@ -175,9 +176,10 @@ def _create_post_marker_or_skip(bucket_name: str, video_id: str) -> bool:
         )
         print(f"[idempotency] created marker {marker_key}")
         return True
-    except Conflict:
+    except (Conflict, PreconditionFailed):
         print(f"[idempotency] marker exists {marker_key}; skipping")
         return False
+
 
 # ---------------------------------------------------------------------------
 # Convenience wrappers

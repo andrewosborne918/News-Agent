@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
 
     steps:
       - name: Checkout
@@ -86,6 +87,13 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Verify active gcloud account
+        run: |
+          echo "Currently authenticated account:"
+          gcloud config get account
+          echo "List of active accounts:"
+          gcloud auth list --filter=status:ACTIVE
 
       - name: Show deployer SA email (debug)
         run: |

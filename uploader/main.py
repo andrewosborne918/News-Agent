@@ -30,19 +30,21 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError, ResumableUploadError
 import requests
-# ---------- caption_utils fallback shim ----------
+
+# -------- caption_utils fallback shim --------
 try:
     from caption_utils import (
         _create_post_marker_or_skip,
         _load_json,
         _ensure_caption,
         _build_caption,
+        ensure_caption_dict,
     )
     _CAPTION_UTILS_AVAILABLE = True
     print("caption_utils: using bundled implementation")
-except Exception:
+except Exception as e:
     _CAPTION_UTILS_AVAILABLE = False
-    print("caption_utils: not found, using local shim")
+    print(f"caption_utils: not found, using local shim ({e})")
     import json
     import os
     from google.cloud import storage
@@ -57,18 +59,24 @@ except Exception:
         except Exception:
             return json.loads(data)
 
-    def _create_post_marker_or_skip(bucket_name: str, json_blob_name: str) -> bool:
-        base_no_ext = os.path.splitext(json_blob_name)[0]
-        marker_name = f"{base_no_ext}.posted"
-        client = storage.Client()
-        bkt = client.bucket(bucket_name)
-        marker = bkt.blob(marker_name)
-        if marker.exists():
-            print(f"skip: marker exists -> {marker_name}")
+    from google.api_core.exceptions import Conflict, PreconditionFailed
+
+    def _create_post_marker_or_skip(bucket_name: str, video_id: str) -> bool:
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        marker_key = f"posted/{video_id}.lock"
+        marker_blob = bucket.blob(marker_key)
+        try:
+            marker_blob.upload_from_string(
+                data=b"",
+                if_generation_match=0,
+                content_type="application/octet-stream",
+            )
+            print(f"[idempotency] created marker {marker_key}")
+            return True
+        except (Conflict, PreconditionFailed):
+            print(f"[idempotency] marker exists {marker_key}; skipping")
             return False
-        marker.upload_from_string(b"ok")
-        print(f"marker created -> {marker_name}")
-        return True
 
     def _ensure_caption(meta: dict) -> dict:
         title = meta.get("Title") or meta.get("title") or "Update"
@@ -505,44 +513,56 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         meta = _load_json(bucket_name, json_blob_name)
     except Exception as e:
         print(f"ERROR: failed to load metadata JSON: {e}")
-        return ("failed to load metadata", 200)  # 200 so Scheduler doesn't retry forever
+        # 200 so Scheduler doesn't retry forever
+        return ("failed to load metadata", 200)
 
-    # Ensure Title/Description/Tags exist (AI polish may run elsewhere)
+    # Ensure Title/Description/Tags exist (normalize to lower-case keys)
     try:
-        meta = _ensure_caption(meta or {})
+        # If you imported ensure_caption_dict from caption_utils, use it:
+        try:
+            meta = ensure_caption_dict(meta or {})  # preferred
+        except NameError:
+            # Fallback: call _ensure_caption directly if wrapper isn't imported
+            meta = _ensure_caption(meta or {})
     except Exception as e:
         print(f"ERROR: _ensure_caption failed: {e}")
+        # minimal fallback
         meta = meta or {}
-        meta.setdefault("Title", "Update")
-        meta.setdefault("Description", "")
-        meta.setdefault("Tags", [])
+        meta = {
+            "title": meta.get("title") or meta.get("Title") or "Update",
+            "description": (meta.get("description") or meta.get("Description") or "").strip(),
+            "hashtags": meta.get("hashtags") or meta.get("Tags") or [],
+        }
 
-    # Build title + final caption
+    # Build final caption string; title comes from meta
     try:
-        title, caption = _build_caption(meta)
+        title = (meta.get("title") or "Update").strip()
+        caption = _build_caption(meta)  # <- returns a single string now
     except Exception as e:
         print(f"ERROR: _build_caption failed: {e}")
-        title = meta.get("Title", "Update")
-        caption = (meta.get("Description") or "").strip()
+        title = (meta.get("title") or meta.get("Title") or "Update").strip()
+        caption = (meta.get("description") or meta.get("Description") or "").strip()
 
-    print(f"  Title: {title[:80]}{'...' if len(title)>80 else ''}")
-    print(f"  Description: {caption[:100]}{'...' if len(caption)>100 else ''}")
-    print(f"  Tags: {meta.get('Tags')}")
+    tags = meta.get("hashtags") or []
+    print(f"  Title: {title[:80]}{'...' if len(title) > 80 else ''}")
+    print(f"  Description: {caption[:100]}{'...' if len(caption) > 100 else ''}")
+    print(f"  Tags: {tags}")
 
     # Derive companion video path from the JSON name (same prefix, .mp4)
     base_no_ext = os.path.splitext(json_blob_name)[0]
     video_blob_name = base_no_ext + ".mp4"
     print(f"  Video candidate: {video_blob_name}")
 
-    # ---- keep your real upload calls if you already have them ----
+    # ---- your real upload calls here ----
     try:
-        # _upload_youtube_short(bucket_name, video_blob_name, title, caption)
-        # _upload_facebook_reel(bucket_name, video_blob_name, title, caption)
+        # _upload_youtube(bucket_name, video_blob_name, title, caption)
+        # _upload_facebook(bucket_name, video_blob_name, title, caption)
         pass
     except Exception as e:
         print(f"ERROR: publish failed: {e}\n{traceback.format_exc()}")
 
     return (f"ok: processed {json_blob_name}", 200)
+
 
 
 # -----------------------------
