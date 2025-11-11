@@ -153,7 +153,7 @@ def _ensure_caption(meta: Dict) -> Dict:
 # Caption building and idempotency utilities
 # ---------------------------------------------------------------------------
 
-def _build_caption(parts: Dict) -> str:
+def _build_caption(parts: Dict) -> Dict:
     """Build a final caption string."""
     title = (parts.get("title") or "").strip()
     desc = (parts.get("description") or "").strip()
@@ -162,22 +162,43 @@ def _build_caption(parts: Dict) -> str:
     return body
 
 
-def _create_post_marker_or_skip(bucket_name: str, video_id: str) -> bool:
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    marker_key = f"posted/{video_id}.lock"
-    marker_blob = bucket.blob(marker_key)
-    try:
-        marker_blob.upload_from_string(
-            data=b"",
-            if_generation_match=0,
-            content_type="application/octet-stream",
-        )
-        print(f"[idempotency] created marker {marker_key}")
-        return True
-    except (Conflict, PreconditionFailed):
-        print(f"[idempotency] marker exists {marker_key}; skipping")
-        return False
+def _build_caption(parts: Dict) -> Dict:
+    """
+    Normalize and enrich caption metadata.
+    Returns a dict with:
+        {
+          "title": str,
+          "description": str,
+          "hashtags": List[str],
+          "script": Optional[str]
+        }
+    """
+
+    title = (parts.get("title") or parts.get("Title") or "Update").strip()
+    description = (parts.get("description") or parts.get("Description") or "").strip()
+    script = (parts.get("script") or parts.get("narration") or "").strip()
+    hashtags = parts.get("hashtags") or parts.get("tags") or []
+
+    # Build a single caption text if description is missing
+    if not description:
+        caption_lines = [title]
+        if script:
+            caption_lines.append(script)
+        if hashtags:
+            caption_lines.append(" ".join(f"#{h.strip().lstrip('#')}" for h in hashtags))
+        description = "\n\n".join(caption_lines)
+
+    # Normalize hashtags
+    normalized_tags = [f"#{t.strip().lstrip('#')}" for t in hashtags if t.strip()]
+
+    # Return a unified dict (what main.py expects)
+    return {
+        "title": title,
+        "description": description,
+        "hashtags": normalized_tags,
+        "script": script,
+    }
+
 
 
 # ---------------------------------------------------------------------------
