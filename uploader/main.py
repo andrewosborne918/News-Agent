@@ -1,5 +1,11 @@
+import os
+import tempfile
+import traceback
+
 from google.cloud import storage
-import tempfile, os
+
+# When deploying with --source=./uploader, this import should NOT have 'uploader.'
+from caption_utils import build_title_and_caption
 
 def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
     """Download gs://bucket/blob to a local temp file and return the local path."""
@@ -11,74 +17,6 @@ def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
     os.close(fd)
     blob.download_to_filename(tmp)
     return tmp
-
-"""
-Google Cloud Function: Automatically post videos to YouTube Shorts + Facebook
-Triggers when a new video is uploaded to Google Cloud Storage
-
-Enhancements:
-- Adds _polish_caption_with_ai() to rewrite title/description/hashtags in a
-  concise, neutral, professional news voice suitable for narration.
-- Normalizes hashtags for YouTube/Facebook.
-- Graceful fallback if AI is unavailable or returns bad output.
-"""
-
-from pathlib import Path
-
-from google.cloud import storage
-
-import os
-import tempfile
-import time
-import random
-import json
-from typing import Dict, Any, List, Tuple
-import functions_framework
-from cloudevents.http import CloudEvent
-
-
-from google.cloud import storage, secretmanager
-from google.api_core.exceptions import NotFound
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from googleapiclient.errors import HttpError, ResumableUploadError
-import requests
-
-# -------- caption_utils fallback shim --------
-try:
-    from uploader.caption_utils import build_title_and_caption
-        _create_post_marker_or_skip,
-        _load_json,
-        _ensure_caption,
-        _build_caption,
-        ensure_caption_dict,
-    )
-    _CAPTION_UTILS_AVAILABLE = True
-    print("caption_utils: using bundled implementation")
-except Exception as e:
-    _CAPTION_UTILS_AVAILABLE = False
-    print(f"caption_utils: not found, using local shim ({e})")
-    import json
-    import os
-    from google.cloud import storage
-
-    def _load_json(bucket_name: str, blob_name: str) -> dict:
-        client = storage.Client()
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(blob_name)
-        data = blob.download_as_bytes()
-        try:
-            return json.loads(data.decode("utf-8"))
-        except Exception:
-            return json.loads(data)
-
-    from google.api_core.exceptions import Conflict, PreconditionFailed
-
-    def _create_post_marker_or_skip(bucket_name: str, video_id: str) -> bool:
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(bucket_name)
-        marker_key = f"posted/{video_id}.lock"
         marker_blob = bucket.blob(marker_key)
         try:
             marker_blob.upload_from_string(
