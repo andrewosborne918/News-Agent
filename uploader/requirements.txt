@@ -1,8 +1,18 @@
+# Cloud Functions v2 runtime
+functions-framework==3.5.0
+cloudevents==1.11.0
+
+# GCP clients you use
+google-cloud-storage>=2.18.0
+google-cloud-secret-manager>=2.20.0
 google-api-python-client>=2.100.0
 google-auth>=2.23.0
 google-auth-httplib2>=0.1.1
 google-auth-oauthlib>=1.1.0
-google-cloud-storage>=2.18.0
-google-cloud-secret-manager>=2.16.0
+
+# Gemini (prefer new SDK, keep legacy fallback)
+google-genai>=0.3.0
 google-generativeai>=0.7.0
+
+# Misc
 requests>=2.31.0

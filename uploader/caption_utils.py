@@ -3,7 +3,7 @@ import json
 import os
 from typing import Dict, List
 from google.cloud import storage
-from google.api_core.exceptions import Conflict
+from google.api_core.exceptions import Conflict, PreconditionFailed
 
 # ---------------------------------------------------------------------------
 # Gemini setup (prefers new google-genai SDK, falls back to google-generativeai)
@@ -161,7 +161,6 @@ def _build_caption(parts: Dict) -> str:
     body = "\n\n".join(x for x in [title, desc, tags] if x).strip()
     return body
 
-from google.api_core.exceptions import Conflict, PreconditionFailed
 
 def _create_post_marker_or_skip(bucket_name: str, video_id: str) -> bool:
     storage_client = storage.Client()

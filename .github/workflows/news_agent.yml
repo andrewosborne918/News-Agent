@@ -91,7 +91,7 @@ jobs:
       - name: Verify active gcloud account
         run: |
           echo "Currently authenticated account:"
-          gcloud config get account
+          gcloud config get-value account
           echo "List of active accounts:"
           gcloud auth list --filter=status:ACTIVE
 
@@ -179,5 +179,5 @@ jobs:
             --memory=1Gi \
             --timeout=540s \
             --retry \
-            --set-secrets=FACEBOOK_PAGE_TOKEN=FACEBOOK_PAGE_TOKEN:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_CREDENTIALS_JSON=YOUTUBE_CREDENTIALS_JSON:latest \
+            --set-secrets=FACEBOOK_PAGE_TOKEN=FACEBOOK_PAGE_TOKEN:latest,FB_PAGE_ID=FB_PAGE_ID:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_CREDENTIALS_JSON=YOUTUBE_CREDENTIALS_JSON:latest \
             --source=build/gcs-to-social
