@@ -11,16 +11,7 @@ def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
     os.close(fd)
     blob.download_to_filename(tmp)
     return tmp
-def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
-    """Download gs://bucket/blob to a local temporary file and return its path."""
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
-    _, ext = os.path.splitext(blob_name)
-    fd, tmp = tempfile.mkstemp(suffix=ext or ".bin")
-    os.close(fd)
-    blob.download_to_filename(tmp)
-    return tmp
+
 """
 Google Cloud Function: Automatically post videos to YouTube Shorts + Facebook
 Triggers when a new video is uploaded to Google Cloud Storage
