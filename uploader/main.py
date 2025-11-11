@@ -1,3 +1,16 @@
+from google.cloud import storage
+import tempfile, os
+
+def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
+    """Download gs://bucket/blob to a local temp file and return the local path."""
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    _, ext = os.path.splitext(blob_name)
+    fd, tmp = tempfile.mkstemp(suffix=ext or ".bin")
+    os.close(fd)
+    blob.download_to_filename(tmp)
+    return tmp
 def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
     """Download gs://bucket/blob to a local temporary file and return its path."""
     client = storage.Client()
@@ -557,7 +570,7 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         tags = meta.get("hashtags") or meta.get("Tags") or []
     meta = {"title": title, "description": description, "hashtags": tags}
     title, caption = build_title_and_caption(meta)
-    logger.info(f"_build_caption type: {type(title).__name__},{type(caption).__name__}")
+    logger.info(f"caption type: {type(title).__name__},{type(caption).__name__}")
 
     # Idempotency marker: processed_markers/{json_blob_name}.done
     storage_client = storage.Client()
@@ -568,7 +581,7 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         logger.info("Already processed, skipping.")
         return (f"already processed: {json_blob_name}", 200)
     except Exception as e:
-        print(f"ERROR: caption build failed: {e}")
+        logger.exception("ERROR: caption build failed: %s", e)
         title = (meta.get("title") or meta.get("Title") or "Update").strip()
         description = (meta.get("description") or meta.get("Description") or "").strip()
         tags = meta.get("hashtags") or meta.get("Tags") or []
@@ -586,23 +599,21 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
     print(f"  Video candidate: {video_blob_name}")
 
     # ---- do the uploads ----
-    tmp_path = None
+    local_video_path = _download_gcs_to_tempfile(bucket_name, video_blob_name)
     try:
-        tmp_path = _download_gcs_to_tempfile(bucket_name, video_blob_name)
-
-        print("[youtube] uploading…")
-        _upload_youtube(tmp_path, title, description, tags)
+        print(f"Uploading to YouTube: {video_blob_name}")
+        _upload_youtube(local_video_path, title, caption, tags)
         print("[youtube] done")
 
-        print("[facebook] uploading…")
-        _upload_facebook(tmp_path, title, description)
+        print(f"Uploading to Facebook: {video_blob_name}")
+        _upload_facebook(local_video_path, title, caption)
         print("[facebook] done")
     except Exception as e:
         print(f"ERROR: publish failed: {e}\n{traceback.format_exc()}")
     finally:
         try:
-            if tmp_path and os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            if local_video_path and os.path.exists(local_video_path):
+                os.remove(local_video_path)
         except Exception:
             pass
 
