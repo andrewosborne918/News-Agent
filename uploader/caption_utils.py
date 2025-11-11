@@ -208,6 +208,7 @@ def build_title_and_caption(meta: Dict) -> Tuple[str, str]:
     Always returns exactly (title, caption).
     """
     print("[caption] build_title_and_caption invoked")
+    print("[caption] build_title_and_caption invoked")
     title, description, hashtags = _derive_title_desc_tags(meta)
     caption = _compose_caption_text(title, description, hashtags)
     return title, caption

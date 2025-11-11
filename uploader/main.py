@@ -152,7 +152,8 @@ def _maybe_download_companion_metadata(bucket: str, blob_name: str) -> dict | No
         fd, tmp = tempfile.mkstemp(suffix=".json")
         os.close(fd)
         meta_blob.download_to_filename(tmp)
-        data = json.loads(Path(tmp).read_text(encoding="utf-8"))
+        with open(tmp, "r", encoding="utf-8") as f:
+            data = json.load(f)
         os.remove(tmp)
         if isinstance(data, dict):
             print(f"DEBUG: Found companion metadata JSON: {meta_blob_name}")
@@ -567,7 +568,7 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         logger.info("Already processed, skipping.")
         return (f"already processed: {json_blob_name}", 200)
     except Exception as e:
-        print(f"ERROR: _build_caption failed: {e}")
+        print(f"ERROR: caption build failed: {e}")
         title = (meta.get("title") or meta.get("Title") or "Update").strip()
         description = (meta.get("description") or meta.get("Description") or "").strip()
         tags = meta.get("hashtags") or meta.get("Tags") or []
