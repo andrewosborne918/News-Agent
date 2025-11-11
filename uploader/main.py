@@ -216,15 +216,28 @@ def _upload_youtube(filepath: str, title: str, description: str, tags: list) -> 
     """
     print(f"Uploading to YouTube: {title}")
     
-    # Create credentials from refresh token
-    creds = Credentials(
-        token=None,
-        refresh_token=_get_secret("YT_REFRESH_TOKEN"),
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=_get_secret("YT_CLIENT_ID"),
-        client_secret=_get_secret("YT_CLIENT_SECRET"),
-        scopes=["https://www.googleapis.com/auth/youtube.upload"],
-    )
+    # Create credentials (support combined secret or individual fields)
+    creds_json = _try_get_secret("YOUTUBE_CREDENTIALS_JSON")
+    if creds_json:
+        data = json.loads(creds_json)
+        creds = Credentials(
+            token=None,
+            refresh_token=data["refresh_token"],
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=data["client_id"],
+            client_secret=data["client_secret"],
+            scopes=["https://www.googleapis.com/auth/youtube.upload"],
+        )
+    else:
+        creds = Credentials(
+            token=None,
+            refresh_token=_get_secret("YT_REFRESH_TOKEN"),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=_get_secret("YT_CLIENT_ID"),
+            client_secret=_get_secret("YT_CLIENT_SECRET"),
+            scopes=["https://www.googleapis.com/auth/youtube.upload"],
+        )
+
     
     # Build YouTube client
     youtube = build("youtube", "v3", credentials=creds)
@@ -286,7 +299,7 @@ def _upload_facebook(filepath: str, title: str, description: str) -> str:
     print(f"Uploading to Facebook")
     
     page_id = _get_secret("FB_PAGE_ID")
-    token = _get_secret("FB_PAGE_TOKEN")
+    token = _get_secret("FACEBOOK_PAGE_TOKEN")
     
     # Facebook Graph API endpoint for video upload
     url = f"https://graph-video.facebook.com/v19.0/{page_id}/videos"
@@ -534,39 +547,52 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
             "hashtags": meta.get("hashtags") or meta.get("Tags") or [],
         }
 
-    # Build final caption string; title comes from meta
+    # Build title + final caption (caption_utils._build_caption returns ONE string)
     try:
-        title = (meta.get("title") or "Update").strip()
-        caption = _build_caption(meta)  # <- returns a single string now
+        title = (meta.get("title") or meta.get("Title") or "Update").strip()
+        description = (meta.get("description") or meta.get("Description") or "").strip()
+        tags = meta.get("hashtags") or meta.get("Tags") or []
+        caption = _build_caption({"title": title, "description": description, "hashtags": tags})
     except Exception as e:
         print(f"ERROR: _build_caption failed: {e}")
         title = (meta.get("title") or meta.get("Title") or "Update").strip()
-        caption = (meta.get("description") or meta.get("Description") or "").strip()
+        description = (meta.get("description") or meta.get("Description") or "").strip()
+        tags = meta.get("hashtags") or meta.get("Tags") or []
+        caption = description  # safe fallback
 
-    tags = meta.get("hashtags") or []
     print(f"  Title: {title[:80]}{'...' if len(title) > 80 else ''}")
     print(f"  Description: {caption[:100]}{'...' if len(caption) > 100 else ''}")
     print(f"  Tags: {tags}")
+
 
     # Derive companion video path from the JSON name (same prefix, .mp4)
     base_no_ext = os.path.splitext(json_blob_name)[0]
     video_blob_name = base_no_ext + ".mp4"
     print(f"  Video candidate: {video_blob_name}")
 
-        # ---- do the uploads ----
+    # ---- do the uploads ----
+    tmp_path = None
     try:
+        tmp_path = _download_from_gcs(bucket_name, video_blob_name)
+
         print("[youtube] uploading…")
-        _upload_youtube(bucket_name, video_blob_name, title, caption)
+        _upload_youtube(tmp_path, title, description, tags)
         print("[youtube] done")
 
         print("[facebook] uploading…")
-        _upload_facebook(bucket_name, video_blob_name, title, caption)
+        _upload_facebook(tmp_path, title, description)
         print("[facebook] done")
     except Exception as e:
         print(f"ERROR: publish failed: {e}\n{traceback.format_exc()}")
-
+    finally:
+        try:
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
     return (f"ok: processed {json_blob_name}", 200)
+
 
 
 
@@ -588,15 +614,22 @@ def gcs_to_social(event: CloudEvent):
         print("[skip] missing bucket/name in event")
         return
 
-    # Only process the metadata JSON; mp4 uploads will be ignored
+    if not name.startswith("incoming/"):
+        print(f"Ignoring object outside incoming/: {name}")
+        return
+
     if not name.lower().endswith(".json"):
         print(f"Ignoring non-json object: {name}")
         return
 
-    # Delegate to your existing processor
-    return _process_metadata_json(bucket, name)
+    print("============================================================")
+    print("Processor invoked")
+    print("============================================================")
+    print(f"Bucket: {bucket}")
+    print(f"JSON:   {name}")
 
-
+    body, status = _process_metadata_json(bucket, name)
+    print(body)
 
 # -----------------------------
 # HTTP triggers for manual + scheduled posting
