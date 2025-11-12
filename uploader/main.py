@@ -15,6 +15,21 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, ResumableUploadError
 
 import functions_framework
+# Cloud Event entry point for Cloud Run/Functions Framework
+@functions_framework.cloud_event
+def gcs_to_social(event):
+    """Cloud Storage (GCS) trigger for new/changed objects."""
+    data = event.data or {}
+    bucket = data.get("bucket")
+    name = data.get("name")
+
+    # Only process companion JSON files; ignore everything else
+    if not bucket or not name or not name.endswith(".json"):
+        print(f"skip: not a metadata JSON -> bucket={bucket} name={name}")
+        return
+
+    msg, _status = _process_metadata_json(bucket, name)
+    print(msg)
 
 # IMPORTANT: caption_utils.py must be in the same folder as main.py
 from caption_utils import build_title_and_caption, ensure_caption_dict
@@ -41,39 +56,11 @@ def _create_post_marker_or_skip(bucket_name: str, json_blob_name: str) -> bool:
     Create an idempotency marker <base>.posted next to the JSON.
     Returns True if we created the marker (proceed), False if it exists (skip).
     """
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    base_no_ext = os.path.splitext(json_blob_name)[0]
-    marker_key = f"{base_no_ext}.posted"
-    marker_blob = bucket.blob(marker_key)
-    try:
-        marker_blob.upload_from_string(
-            data=b"",
-            if_generation_match=0,
-            content_type="application/octet-stream",
-        )
-        print(f"[idempotency] created marker {marker_key}")
-        return True
-    except (Conflict, PreconditionFailed):
-        print(f"[idempotency] marker exists {marker_key}; skipping")
-        return False
+    # ...existing code...
 
 def _load_json(bucket_name: str, json_blob_name: str) -> Dict[str, Any]:
     """Download and parse a companion JSON from GCS."""
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(json_blob_name)
-    fd, tmp = tempfile.mkstemp(suffix=".json")
-    os.close(fd)
-    try:
-        blob.download_to_filename(tmp)
-        with open(tmp, "r", encoding="utf-8") as f:
-            return json.load(f)
-    finally:
-        try:
-            os.remove(tmp)
-        except Exception:
-            pass
+    # ...existing code...
 
 def _create_post_marker_or_skip(bucket_name: str, json_blob_name: str) -> bool:
     """
