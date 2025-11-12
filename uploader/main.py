@@ -19,6 +19,8 @@ import functions_framework
 
 # IMPORTANT: caption_utils.py must be in the same folder as main.py
 from caption_utils import build_title_and_caption, ensure_caption_dict
+print("[startup] cwd:", os.getcwd())
+print("[startup] dir contents:", os.listdir(os.path.dirname(__file__)))
 
 logger = logging.getLogger(__name__)
 PROJECT_ID = os.environ.get("GCP_PROJECT")
