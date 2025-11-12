@@ -1,4 +1,3 @@
-
 import os
 import json
 import tempfile
@@ -191,4 +190,17 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
 
     return (f"ok: processed {json_blob_name}", 200)
 
-#Fix
+# --- Upload stubs ---
+def _upload_youtube(local_filename: str, title: str, description: str, tags: list[str] | None = None):
+    """Uploads a video to YouTube from a local file path."""
+    print(f"[stub] Would upload to YouTube: {local_filename}, title={title}")
+    # Example:
+    # media = MediaFileUpload(local_filename, chunksize=8 * 1024 * 1024, resumable=True)
+    # ... build body, insert, next_chunk loop ...
+    pass
+
+def _upload_facebook(local_filename: str, title: str, description: str):
+    """Uploads a video to Facebook from a local file path."""
+    print(f"[stub] Would upload to Facebook: {local_filename}, title={title}")
+    # ... actual Facebook upload logic ...
+    pass
