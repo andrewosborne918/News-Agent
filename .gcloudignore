@@ -1,0 +1,19 @@
+# Default ignore rules
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+*.env
+*.venv
+venv/
+.env*
+.git/
+.gitignore
+node_modules/
+.DS_Store
+
+# Do NOT exclude uploader/caption_utils.py
+!uploader/caption_utils.py
