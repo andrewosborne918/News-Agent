@@ -1,3 +1,4 @@
+from caption_utils import build_title_and_caption, ensure_caption_dict
 import os
 import json
 import tempfile
@@ -136,12 +137,13 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         }
 
 
-    # Use Gemini-powered or fallback caption builder
+    # Use build_title_and_caption for title/caption, and get tags from meta
     try:
-        title, caption, tags = get_title_description_tags(meta)
+        title, caption = build_title_and_caption(meta)
         logger.info("caption type: %s,%s", type(title).__name__, type(caption).__name__)
+        tags = meta.get("hashtags", [])
     except Exception as e:
-        logger.exception("ERROR: get_title_description_tags failed: %s", e)
+        logger.exception("ERROR: build_title_and_caption failed: %s", e)
         title = (meta.get("title") or meta.get("Title") or "Update").strip()
         caption = (meta.get("description") or meta.get("Description") or "").strip()
         tags = meta.get("hashtags") or meta.get("Tags") or []
