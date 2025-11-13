@@ -3,7 +3,8 @@ import json
 import os
 import logging
 import re
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
+_GEMINI_API_KEY_CACHE: Optional[str] = None
 
 from google.cloud import secretmanager
 import google.generativeai as genai
@@ -11,7 +12,7 @@ import google.generativeai as genai
 # Gemini API key cache
 _GEMINI_API_KEY_CACHE: str | None = None
 
-def _get_gemini_api_key() -> str | None:
+def _get_gemini_api_key() -> Optional[str]:
     """Fetch GEMINI_API_KEY from Secret Manager (cached). Returns None if unavailable."""
     global _GEMINI_API_KEY_CACHE
     if _GEMINI_API_KEY_CACHE is not None:
@@ -41,7 +42,9 @@ def _extract_json(text: str) -> str:
     match = re.search(r"\{.*\}", text, flags=re.DOTALL)
     return match.group(0) if match else text
 
-def summarize_with_gemini(source_text: str, topic_hint: str | None = None) -> Tuple[str, str, List[str]] | None:
+def summarize_with_gemini(
+    source_text: str, topic_hint: Optional[str] = None
+) -> Optional[Tuple[str, str, List[str]]]:
     """
     Use Gemini to generate a (title, description, hashtags) triple from the video source text.
     Returns None on failure so caller can fall back.
