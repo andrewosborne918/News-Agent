@@ -80,80 +80,175 @@ def summarize_with_gemini(source_text: str, topic_hint: str | None = None) -> Tu
         prompt_parts.append("\nSource content for the video:\n")
         prompt_parts.append(source_text[:12000])  # keep under token limits
 
-        prompt = "\n".join(prompt_parts)
-
-        response = model.generate_content(
-            prompt,
-            generation_config={
-                "temperature": 0.4,
-                "max_output_tokens": 512,
-            },
-        )
-
-        if hasattr(response, "text") and response.text:
-            raw = response.text
-        else:
-            parts_text: List[str] = []
-            for cand in getattr(response, "candidates", []):
-                for part in getattr(cand.content, "parts", []):
-                    if getattr(part, "text", None):
-                        parts_text.append(part.text)
-            raw = "\n".join(parts_text)
-
-        raw = raw.strip()
-        if not raw:
-            logging.warning("Gemini returned empty caption response.")
+        """
+        Use Gemini to generate a (title, description, hashtags) triple from the video source text.
+        Returns None on failure so caller can fall back.
+        """
+        api_key = _get_gemini_api_key()
+        if not api_key:
+            logging.info("No GEMINI_API_KEY available; skipping AI caption.")
             return None
 
-        json_str = _extract_json(raw)
-        data = json.loads(json_str)
+        # Log what we're actually sending so we can debug
+        logging.info("Gemini source_text preview: %s", source_text[:400].replace("\n", " "))
+        if topic_hint:
+            logging.info("Gemini topic_hint: %s", topic_hint)
 
-        title = str(data.get("title", "")).strip()[:100] or "Daily News Update"
-        description = str(data.get("description", "")).strip() or title
-        hashtags = data.get("hashtags") or []
+        try:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel("gemini-1.5-flash")
 
-        tags: List[str] = []
-        seen = set()
-        for tag in hashtags:
-            if not isinstance(tag, str):
-                continue
-            cleaned = re.sub(r"[^a-zA-Z0-9_]", "", tag.lower())
-            if not cleaned:
-                continue
-            tag_with_hash = "#" + cleaned
-            if tag_with_hash not in seen:
-                seen.add(tag_with_hash)
-                tags.append(tag_with_hash)
-        tags = tags[:15]
+            # ---- PROMPT WITH EXAMPLES ----
+            prompt_parts: List[str] = [
+                "You write social copy for a short conservative news video.",
+                "Your job is to create an accurate, specific YouTube Shorts title, description, and hashtags.",
+                "",
+                "Rules:",
+                "- The output MUST be grounded ONLY in the source text I give you.",
+                "- Do NOT invent facts, numbers, quotes, or places that are not in the source.",
+                "- Use clear, specific details: names, locations, numbers, and dates WHEN they appear in the source.",
+                "- Tone: neutral, concise, professional news voice. No loaded language, no adjectives like 'disgraceful', 'heroic', etc.",
+                "- Assume the viewer has NOT seen the video yet.",
+                "- Keep the title focused on the main event or conflict.",
+                "",
+                "Output format:",
+                "Return ONLY a JSON object, no commentary, with EXACTLY this shape:",
+                '{',
+                '  "title": "short headline (max 90 chars)",',
+                '  "description": "2-4 sentence neutral summary that mentions WHO did WHAT, WHERE, and WHEN if available. Add 1-2 short lines of extra context if present in the source.",',
+                '  "hashtags": ["tag1","tag2","tag3"]',
+                '}',
+                "",
+                "Hashtag rules:",
+                "- 5-15 hashtags.",
+                "- No # symbol in the JSON; I will add it myself.",
+                "- Lowercase words, use only letters, numbers, or underscores.",
+                "- Mix general tags (news, politics) with 2-5 specific tags based on people/places/issues in the story.",
+                "",
+                "Example 1:",
+                "Source: Former President Donald Trump attended a Washington Commanders home game on Sunday. Videos from the stadium showed loud boos from sections of the crowd when he appeared on the big screen.",
+                "Correct JSON:",
+                '{',
+                '  "title": "Trump Booed at Washington Commanders Game",',
+                '  "description": "Former President Donald Trump attended a Washington Commanders home game on Sunday. Video from inside the stadium captured loud boos from parts of the crowd when he appeared on the video board. The reaction quickly circulated online, drawing a range of responses from commentators and fans.",',
+                '  "hashtags": ["donald_trump","washington_commanders","nfl","us_politics","stadium_crowd"]',
+                '}',
+                "",
+                "Example 2:",
+                "Source: Border Patrol reported a sharp increase in encounters along the southern border in October, with agents processing more than 200,000 migrants. Officials said the increase reflects ongoing pressure on the system, while critics called for stronger enforcement.",
+                "Correct JSON:",
+                '{',
+                '  "title": "Border Encounters Top 200,000 in October",',
+                '  "description": "Border Patrol reported a sharp rise in migrant encounters along the southern border in October, processing more than 200,000 people. Officials said the higher numbers highlight ongoing strain on the system, while critics renewed calls for tougher enforcement measures.",',
+                '  "hashtags": ["border","immigration","us_politics","border_patrol","southern_border"]',
+                '}',
+                "",
+                "Now follow the same style for the new source text.",
+            ]
 
-        return title, description, tags
+            if topic_hint:
+                prompt_parts.append(f"\nTopic hint (may help pick focus, do not override facts): {topic_hint}")
 
-    except Exception as e:
-        logging.warning("Gemini caption generation failed: %s", e)
-        return None
+            prompt_parts.append("\nSource content for the video:\n")
+            prompt_parts.append(source_text[:12000])
 
-def get_title_description_tags(meta: Dict[str, Any]) -> Tuple[str, str, List[str]]:
-    """
-    Decide title/description/tags for the upload.
+            prompt = "\n".join(prompt_parts)
 
-    Priority:
-    1) If Gemini can summarize from qa_text / video_script → use that.
-    2) Else, if companion JSON provides title/description/hashtags → use those.
-    3) Else, fall back to your existing heuristic logic.
-    """
+            response = model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.2,
+                    "max_output_tokens": 450,
+                },
+            )
+
+            if hasattr(response, "text") and response.text:
+                raw = response.text
+            else:
+                parts_text: List[str] = []
+                for cand in getattr(response, "candidates", []):
+                    for part in getattr(cand.content, "parts", []):
+                        if getattr(part, "text", None):
+                            parts_text.append(part.text)
+                raw = "\n".join(parts_text)
+
+            raw = raw.strip()
+            logging.info("Raw Gemini response: %s", raw[:400].replace("\n", " "))
+            if not raw:
+                logging.warning("Gemini returned empty caption response.")
+                return None
+
+            json_str = _extract_json(raw)
+            data = json.loads(json_str)
+
+            title = str(data.get("title", "")).strip()[:100] or "Daily News Update"
+            description = str(data.get("description", "")).strip() or title
+            hashtags = data.get("hashtags") or []
+
+            tags: List[str] = []
+            seen = set()
+            for tag in hashtags:
+                if not isinstance(tag, str):
+                    continue
+                cleaned = re.sub(r"[^a-zA-Z0-9_]", "", tag.lower())
+                if not cleaned:
+                    continue
+                tag_with_hash = "#" + cleaned
+                if tag_with_hash not in seen:
+                    seen.add(tag_with_hash)
+                    tags.append(tag_with_hash)
+
+            tags = tags[:15]
+
+            logging.info("Gemini final caption -> title=%r description_preview=%r tags=%r",
+                         title, description[:120].replace("\n", " "), tags)
+
+            return title, description, tags
+
+        except Exception as e:
+            logging.warning("Gemini caption generation failed: %s", e)
+            return None
+            t = "#" + t.lstrip("#")
+        tags.append(t)
+    tags = tags[:15]
+
+    if meta_title and meta_desc:
+        return meta_title[:100], meta_desc[:4900], tags
+
+    cleaned_title = (meta.get("original_filename") or "Daily News Update").replace("_", " ").title()
+    title = cleaned_title[:100]
+    description = (
+        f"{title}\n\nStay informed with our daily news shorts.\n\n"
+        "#news #shorts #politics #dailynews"
+    )
+    if not tags:
+        tags = ["#news", "#shorts", "#politics", "#dailynews"]
+
+    return title, description, tags
     source_text = None
 
+    # 1. Use qa_text if present
     if isinstance(meta.get("qa_text"), str) and meta["qa_text"].strip():
         source_text = meta["qa_text"].strip()
+        logging.info("Using meta.qa_text as Gemini source.")
+    # 2. or video_script
     elif isinstance(meta.get("video_script"), str) and meta["video_script"].strip():
         source_text = meta["video_script"].strip()
+        logging.info("Using meta.video_script as Gemini source.")
+    # 3. or description if you want
+    elif isinstance(meta.get("description"), str) and meta["description"].strip():
+        source_text = meta["description"].strip()
+        logging.info("Using meta.description as Gemini source.")
 
     topic_hint = (meta.get("title") or meta.get("topic") or "").strip() or None
 
     if source_text:
         ai_result = summarize_with_gemini(source_text, topic_hint=topic_hint)
         if ai_result is not None:
+            logging.info("Using Gemini AI-generated captions.")
             return ai_result
+
+    logging.info("Falling back to non-AI captions.")
 
     meta_title = (meta.get("title") or "").strip()
     meta_desc = (meta.get("description") or "").strip()
@@ -187,52 +282,6 @@ def get_title_description_tags(meta: Dict[str, Any]) -> Tuple[str, str, List[str
         tags = ["#news", "#shorts", "#politics", "#dailynews"]
 
     return title, description, tags
-import os
-from typing import Dict, List, Tuple, Optional
-
-# Optional: only used if you call _load_json()
-try:
-    from google.cloud import storage
-except Exception:
-    storage = None  # keeps module import-safe on local runs
-
-from google.api_core.exceptions import Conflict, PreconditionFailed  # noqa: F401 (kept for parity)
-
-# ---------------------------------------------------------------------------
-# Gemini setup (prefers new google-genai SDK, falls back to google-generativeai)
-# ---------------------------------------------------------------------------
-
-_GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")  # or "gemini-flash-latest"
-_client = None
-_use_new_sdk = False
-_legacy_model = None
-
-try:
-    # ✅ Preferred modern SDK (google-genai)
-    from google import genai  # pip install google-genai
-    _client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-    _use_new_sdk = True
-    print("[Gemini] Using new google-genai SDK with model", _GEMINI_MODEL_NAME)
-except Exception:
-    try:
-        # 🧩 Fallback to legacy SDK (google-generativeai)
-        import google.generativeai as generativeai  # pip install google-generativeai
-        if os.environ.get("GEMINI_API_KEY"):
-            generativeai.configure(api_key=os.environ["GEMINI_API_KEY"])
-            _legacy_model = generativeai.GenerativeModel(_GEMINI_MODEL_NAME)
-            print("[Gemini] Using legacy google-generativeai SDK with model", _GEMINI_MODEL_NAME)
-    except Exception as e:
-        print(f"[Gemini] No valid SDK available: {e}")
-
-# ---------------------------------------------------------------------------
-# Gemini helper
-# ---------------------------------------------------------------------------
-
-def _rewrite_caption(text: str, limit: int = 150) -> str:
-    """Use Gemini to rewrite a caption; returns original text on any failure."""
-    if not text:
-        return text
-    try:
         prompt = (
             "Rewrite the following social caption in a neutral, professional tone. "
             f"Keep it under {limit} characters. Return only the rewritten text.\n\n{text}"
