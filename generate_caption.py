@@ -55,7 +55,9 @@ def generate_caption_with_ai(segments, api_key, article_data=None):
     """Use Gemini to generate a compelling caption from the video segments."""
     
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # --- THIS IS THE FIX ---
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    # -----------------------
     
     # Combine segments into a summary
     content = "\n".join(segments)
@@ -239,7 +241,10 @@ def main():
     # Format for different platforms
     formatted = format_for_social_media(caption_data, platform="twitter")
     print(f"\n{formatted}")
+    
+    # --- THIS IS THE CORRECTED LINE ---
     print("\n" + "="*60)
+    # ----------------------------------
     
     # Save caption data
     save_caption_data(caption_data)
