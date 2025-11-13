@@ -35,6 +35,8 @@ from dotenv import load_dotenv
 import gspread
 import google.generativeai as genai
 from gspread.exceptions import APIError
+# 1. ADD THIS
+import time
 # --- ADD THIS HELPER FUNCTION ---
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 
@@ -527,24 +529,21 @@ def main():
     rows_to_append = []
     last_successful_photo = ""  # Track last successful photo for fallback
     
+    gemini_request_count = 0
     for qid, qtext in questions:
         conservative = (qid == "conservative_angle") or ("conservative" in qid.lower())
         answer = gemini_answer(qtext, article, conservative, model_name=args.model)
+        gemini_request_count += 1
         sents = limit_sentences_length(to_sentences(answer), max_words=args.max_words, min_words=args.min_words)
-        
-        # Get one stock photo URL using AI-suggested terms first
-        # Priority: AI suggestion -> answer keywords -> article keywords -> patriotic -> previous photo
         image_url = get_photo_url_for_answer(answer, article, qid, args.model, last_successful_photo)
-        
-        # Track successful photos for fallback
         if image_url:
             last_successful_photo = image_url
-        
         for idx, sent in enumerate(sents):
-            # Use the same image URL for all segments of this question
             img_path = image_url if not args.image_path_prefix else f"{args.image_path_prefix}{run_id}_{qid}_{idx}.png"
             rows_to_append.append([run_id, qid, idx, sent, img_path, args.duration])
-
+        if gemini_request_count % 9 == 0 and gemini_request_count < len(questions):
+            print("⏳ Pausing for 60 seconds to avoid Gemini rate limit...")
+            time.sleep(60)
     # Write segments
     ws_segments = _with_retry(lambda: sh.worksheet("AnswerSegments"))
     append_rows_safe(ws_segments, rows_to_append)
