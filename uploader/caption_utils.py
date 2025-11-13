@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Tuple, Optional
 import gspread # <-- IMPORT IS AT THE TOP
 from google.cloud import secretmanager
 import google.generativeai as genai
+import google.auth
 
 # --- ADD THIS HELPER FUNCTION ---
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
@@ -49,21 +50,27 @@ _SHEET_CLIENT_CACHE: Optional[gspread.Spreadsheet] = None
 # ----------------------------------------
 
 def _get_sheet_client() -> Optional[gspread.Spreadsheet]:
-    """Connects to the Google Sheet using default service account creds."""
+    """Connects to the Google Sheet using default environment creds."""
     global _SHEET_CLIENT_CACHE
     if _SHEET_CLIENT_CACHE:
         return _SHEET_CLIENT_CACHE
-    
+
     try:
-        # gspread will automatically find the service account credentials
-        # in the Cloud Function environment.
-        gc = gspread.service_account() 
+        # Explicitly use the default compute credentials
+        scopes = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive.file'
+        ]
+        creds, _ = google.auth.default(scopes=scopes)
+        gc = gspread.authorize(creds)
+
         sh = gc.open_by_url(SHEET_URL)
         _SHEET_CLIENT_CACHE = sh
         logger.info("[sheets] Successfully connected to Google Sheet.")
         return sh
     except Exception as e:
-        logger.error(f"[sheets] Failed to connect to Google Sheet: {e}")
+        # Log the full error, including if it's a permissions issue
+        logger.error(f"[sheets] Failed to connect to Google Sheet: {e}", exc_info=True)
         return None
 
 def _get_answers_from_sheet(run_id_key: str) -> Optional[str]:
