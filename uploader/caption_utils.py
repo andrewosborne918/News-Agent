@@ -207,35 +207,60 @@ def summarize_with_gemini(
     
     try:
         genai.configure(api_key=api_key)
-        # model = genai.GenerativeModel("models/gemini-1.5-flash") # <-- No longer need this
     except Exception as e:
         logger.error(f"[gemini] Failed to configure model: {e}")
         return None
 
     topic_prompt = f"The story is about: {topic_hint}\n" if topic_hint else ""
     
-    prompt = f"""
-    Analyze the following text, which contains several key sentences from a news article,
-    and generate a social media post in valid JSON format.
+    # --- THIS IS THE OLD PROMPT TO REPLACE ---
+    # prompt = f"""
+    # Analyze the following text, which contains several key sentences from a news article,
+    # and generate a social media post in valid JSON format.
+    # 
+    # SOURCE TEXT (KEY SENTENCES):
+    # "{source_text}"
+    # 
+    # {topic_prompt}
+    # 
+    # JSON FORMAT:
+    # {{
+    #   "title": "A concise, compelling video title (max 90 chars).",
+    #   "description": "A short, engaging paragraph (2-3 sentences) summarizing the story.",
+    #   "hashtags": ["list", "of", "5", "relevant", "hashtags"]
+    # }}
+    # """
     
-    SOURCE TEXT (KEY SENTENCES):
+    # --- START: NEW PROMPT ---
+    prompt = f"""
+    **Your Role:** You are a senior news analyst and editor for "RightSide Report," a news outlet with a strong conservative perspective.
+    **Your Core Principles:** Your analysis is always guided by the principles of fiscal responsibility, limited government, individual liberty, and a strong national defense.
+    **Your Task:** Analyze the following source text and generate a social media post that frames the story for your conservative audience. Find the angle that relates to our core principles.
+
+    **Guidelines:**
+    1.  **Find the Conservative Angle:** Do not just summarize. Re-frame the story to highlight its impact on the economy, taxes, government overreach, or individual freedoms.
+    2.  **Use a Strong Tone:** Be direct, confident, and analytical.
+    3.  **JSON Format:** The output MUST be in valid JSON.
+
+    **SOURCE TEXT (KEY SENTENCES):**
     "{source_text}"
     
     {topic_prompt}
     
-    JSON FORMAT:
+    **JSON FORMAT:**
     {{
-      "title": "A concise, compelling video title (max 90 chars).",
-      "description": "A short, engaging paragraph (2-3 sentences) summarizing the story.",
-      "hashtags": ["list", "of", "5", "relevant", "hashtags"]
+      "title": "A concise, compelling title that frames the conservative angle (max 90 chars).",
+      "description": "A short, engaging paragraph (2-3 sentences) that explains the story from our perspective, focusing on its impact on our core principles.",
+      "hashtags": ["list", "of", "5", "relevant", "hashtags", "like", "Conservative", "LimitedGov", "Taxes"]
     }}
     """
+    # --- END: NEW PROMPT ---
     
     try:
         response = generate_with_fallback(
             prompt,
-            primary_model_name='gemini-2.5-flash',    # <-- Updated primary model
-            fallback_model_name='gemini-2.0-flash-lite' # <-- Added fallback
+            primary_model_name='gemini-1.5-flash',    # <-- I updated this to 1.5-flash
+            fallback_model_name='gemini-1.0-pro' # <-- I updated this to 1.0-pro
         )
         json_text = _extract_json(response.text)
         ai_data = json.loads(json_text)

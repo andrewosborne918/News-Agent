@@ -330,19 +330,17 @@ def append_rows_safe(ws, rows: List[List], batch_size: int = 100):
 
 # ========================= Gemini =========================
 
+# --- THIS IS THE ONLY SYSTEM PROMPT NOW ---
 CONSERVATIVE_SYSTEM = (
-    "You are providing news commentary. Based on the information provided, "
-    "explain how a conservative commentator might interpret this event. "
-    "Speak directly about the facts and events - never mention 'the article', 'the report', or 'the post'. "
-    "Do not use phrases like 'Breaking News', 'Live from', or location tags. "
-    "Use calm, non-inflammatory language. Answer in 2–3 sentences that flow naturally into a video."
+    "You are a news analyst for 'RightSide Report,' a conservative news outlet. "
+    "Your analysis is guided by fiscal responsibility, limited government, and individual liberty. "
+    "Re-frame the story to highlight its impact on the economy, taxes, or government overreach. "
+    "Speak directly about the facts. NEVER mention 'the article' or 'the report'. "
+    "Your tone is direct, analytical, and confident. "
+    "Answer in 2-3 short, clear sentences suitable for a video segment."
 )
-NEUTRAL_SYSTEM = (
-    "You are providing news commentary. Give a neutral, factual explanation in 2–3 sentences. "
-    "Speak directly about what happened - never mention 'the article', 'the report', or 'the post'. "
-    "Do not use phrases like 'Breaking News', 'Live from', or location tags. "
-    "Write sentences that flow naturally together in a video."
-)
+# --- NEUTRAL_SYSTEM variable has been deleted ---
+
 
 def suggest_photo_search_terms(answer_text: str, article_text: str, model_name: str) -> str:
     """
@@ -379,7 +377,7 @@ Photo search terms (2-4 words only):"""
         resp = generate_with_fallback(
             prompt,
             primary_model_name=model_name,
-            fallback_model_name="gemini-2.0-flash-lite"
+            fallback_model_name="gemini-1.0-pro" # Updated fallback
         )
         suggestion = (resp.text or "").strip().strip('"').strip("'")
         
@@ -431,30 +429,30 @@ def get_photo_url_for_answer(answer_text: str, article_text: str, question_id: s
         print(f"  ⚠️ Error fetching stock photo: {e}")
         return fallback_url if fallback_url else ""
 
-def gemini_answer(question: str, article: str, conservative: bool, model_name: str) -> str:
+# --- THIS FUNCTION IS NOW SIMPLER ---
+def gemini_answer(question: str, article: str, model_name: str) -> str:
     key = os.getenv("GEMINI_API_KEY")
     if not key:
         # Mock for local wiring tests without a key
-        return ("From a conservative perspective, the emphasis is on limited government and accountability."
-                if conservative else
-                "This is a concise neutral summary based on early reporting.")
+        return ("From a conservative perspective, the emphasis is on limited government and accountability.")
+
     try:
         genai.configure(api_key=key)
-        system = CONSERVATIVE_SYSTEM if conservative else NEUTRAL_SYSTEM
-        prompt = f"{system}\n\nNews Information:\n{article}\n\nQuestion:\n{question}\n\nYour Report:"
+        # It now *always* uses CONSERVATIVE_SYSTEM
+        prompt = f"{CONSERVATIVE_SYSTEM}\n\nNews Information:\n{article}\n\nQuestion:\n{question}\n\nYour Report:"
+        
         resp = generate_with_fallback(
             prompt,
             primary_model_name=model_name,
-            fallback_model_name="gemini-2.0-flash-lite"
+            fallback_model_name="gemini-1.0-pro" # Updated fallback
         )
         txt = (resp.text or "").strip()
         if txt:
             return txt
-        return "A brief neutral summary could not be generated."
+        return "A brief summary could not be generated."
     except Exception:
-        return ("A brief neutral summary based on public reporting. Details are evolving."
-                if not conservative else
-                "From a conservative perspective, commentators would emphasize personal responsibility and limited government.")
+        # Simplified fallback
+        return "A brief summary based on public reporting. Details are evolving."
 
 # ========================= Main =========================
 
@@ -478,7 +476,7 @@ def main():
     ap.add_argument("--min-words", type=int, default=10, help="Min words per sentence (combine shorter ones)")
     
     # --- THIS IS THE FIX ---
-    ap.add_argument("--model", default="gemini-2.5-flash", help="Gemini model")
+    ap.add_argument("--model", default="gemini-1.5-flash", help="Gemini model")
     # -----------------------
 
     args = ap.parse_args()
@@ -531,19 +529,24 @@ def main():
     
     gemini_request_count = 0
     for qid, qtext in questions:
-        conservative = (qid == "conservative_angle") or ("conservative" in qid.lower())
-        answer = gemini_answer(qtext, article, conservative, model_name=args.model)
+        # --- LOGIC IS NOW SIMPLER ---
+        # No more 'conservative' boolean check. Just call the function.
+        answer = gemini_answer(qtext, article, model_name=args.model)
         gemini_request_count += 1
+        
         sents = limit_sentences_length(to_sentences(answer), max_words=args.max_words, min_words=args.min_words)
         image_url = get_photo_url_for_answer(answer, article, qid, args.model, last_successful_photo)
         if image_url:
             last_successful_photo = image_url
+            
         for idx, sent in enumerate(sents):
             img_path = image_url if not args.image_path_prefix else f"{args.image_path_prefix}{run_id}_{qid}_{idx}.png"
             rows_to_append.append([run_id, qid, idx, sent, img_path, args.duration])
+            
         if gemini_request_count % 9 == 0 and gemini_request_count < len(questions):
             print("⏳ Pausing for 60 seconds to avoid Gemini rate limit...")
             time.sleep(60)
+            
     # Write segments
     ws_segments = _with_retry(lambda: sh.worksheet("AnswerSegments"))
     append_rows_safe(ws_segments, rows_to_append)
