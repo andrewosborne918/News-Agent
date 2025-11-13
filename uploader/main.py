@@ -1,4 +1,4 @@
-from caption_utils import build_title_and_caption, ensure_caption_dict
+from caption_utils import get_title_description_tags
 import os
 import json
 import tempfile
@@ -123,29 +123,17 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         print(f"ERROR: failed to load metadata JSON: {e}")
         return ("failed to load metadata", 200)
 
-    # Ensure fields
-    try:
-        meta = ensure_caption_dict(meta or {})
-    except Exception as e:
-        print(f"ERROR: ensure_caption_dict failed: {e}")
-        meta = meta or {}
-        meta = {
-            "title": meta.get("title") or meta.get("Title") or "Update",
-            "description": (meta.get("description") or meta.get("Description") or "").strip(),
-            "hashtags": meta.get("hashtags") or meta.get("Tags") or [],
-        }
 
-
-    # Use build_title_and_caption for title/caption, and get tags from meta
+    # Use get_title_description_tags for robust AI-powered caption generation
     try:
-        title, caption = build_title_and_caption(meta)
-        logger.info("caption type: %s,%s", type(title).__name__, type(caption).__name__)
-        tags = meta.get("hashtags", [])
+        title, description, tags = get_title_description_tags(meta)
+        logger.info("caption types: %s, %s, %s", type(title).__name__, type(description).__name__, type(tags).__name__)
     except Exception as e:
-        logger.exception("ERROR: build_title_and_caption failed: %s", e)
+        logger.exception("ERROR: get_title_description_tags failed: %s", e)
         title = (meta.get("title") or meta.get("Title") or "Update").strip()
-        caption = (meta.get("description") or meta.get("Description") or "").strip()
+        description = (meta.get("description") or meta.get("Description") or "").strip()
         tags = meta.get("hashtags") or meta.get("Tags") or []
+
 
     # Pick the .mp4 that matches the JSON (same prefix)
     base_no_ext = os.path.splitext(json_blob_name)[0]
@@ -156,11 +144,11 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
     local_video_path = _download_gcs_to_tempfile(bucket_name, video_blob_name)
     try:
         print(f"Uploading to YouTube (local): {local_video_path}")
-        _upload_youtube(local_video_path, title, caption, tags)
+        _upload_youtube(local_video_path, title, description, tags)
         print("[youtube] done")
 
         print(f"Uploading to Facebook (local): {local_video_path}")
-        _upload_facebook(local_video_path, title, caption)
+        _upload_facebook(local_video_path, title, description)
         print("[facebook] done")
     except Exception as e:
         print(f"ERROR: publish failed: {e}\n{traceback.format_exc()}")
