@@ -447,7 +447,7 @@ def main():
 
     # Output / model settings
     ap.add_argument("--duration", type=float, default=4.0, help="Seconds each sentence is shown")
-    ap.addE_argument("--image-path-prefix", default="", help="Prefix to pre-fill image_path")
+    ap.add_argument("--image-path-prefix", default="", help="Prefix to pre-fill image_path")
     ap.add_argument("--max-words", type=int, default=15, help="Max words per sentence")
     ap.add_argument("--min-words", type=int, default=10, help="Min words per sentence (combine shorter ones)")
     
