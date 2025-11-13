@@ -1,6 +1,193 @@
 # caption_utils.py
 import json
 import os
+import logging
+import re
+from typing import Dict, Any, List, Tuple
+
+from google.cloud import secretmanager
+import google.generativeai as genai
+
+# Gemini API key cache
+_GEMINI_API_KEY_CACHE: str | None = None
+
+def _get_gemini_api_key() -> str | None:
+    """Fetch GEMINI_API_KEY from Secret Manager (cached). Returns None if unavailable."""
+    global _GEMINI_API_KEY_CACHE
+    if _GEMINI_API_KEY_CACHE is not None:
+        return _GEMINI_API_KEY_CACHE
+
+    try:
+        client = secretmanager.SecretManagerServiceClient()
+        project_id = os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        if not project_id:
+            logging.warning("No GCP project id found in env; skipping Gemini key.")
+            return None
+
+        name = f"projects/{project_id}/secrets/GEMINI_API_KEY/versions/latest"
+        response = client.access_secret_version(request={"name": name})
+        api_key = response.payload.data.decode("utf-8").strip()
+        if not api_key:
+            logging.warning("GEMINI_API_KEY secret is empty.")
+            return None
+        _GEMINI_API_KEY_CACHE = api_key
+        return api_key
+    except Exception as e:
+        logging.warning("Could not load GEMINI_API_KEY from Secret Manager: %s", e)
+        return None
+
+def _extract_json(text: str) -> str:
+    """Extract the first {...} block from the model output."""
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    return match.group(0) if match else text
+
+def summarize_with_gemini(source_text: str, topic_hint: str | None = None) -> Tuple[str, str, List[str]] | None:
+    """
+    Use Gemini to generate a (title, description, hashtags) triple from the video source text.
+    Returns None on failure so caller can fall back.
+    """
+    api_key = _get_gemini_api_key()
+    if not api_key:
+        logging.info("No GEMINI_API_KEY available; skipping AI caption.")
+        return None
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        prompt_parts = [
+            "You are writing social copy for a short conservative news video.",
+            "Write a compelling but factual YouTube Shorts title, description, and hashtags.",
+            "Tone: neutral, concise, professional news voice. Do NOT editorialize or speculate.",
+            "Assume the viewer has not seen the video yet.",
+            "",
+            "Return ONLY a JSON object with this exact shape:",
+            '{',
+            '  "title": "short headline (max 90 chars)",',
+            '  "description": "2-4 sentences summarizing the story, plus 1-2 short lines for context",',
+            '  "hashtags": ["tag1","tag2","tag3"]  // 5-15 tags, no # symbols, lowercase words',
+            '}',
+            "",
+            "Constraints:",
+            "- Stay strictly within what is explicitly stated in the source text.",
+            "- No predictions, no opinions, no loaded language.",
+            "- Use U.S. political context where relevant.",
+        ]
+
+        if topic_hint:
+            prompt_parts.append(f"\nTopic hint: {topic_hint}")
+
+        prompt_parts.append("\nSource content for the video:\n")
+        prompt_parts.append(source_text[:12000])  # keep under token limits
+
+        prompt = "\n".join(prompt_parts)
+
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                "temperature": 0.4,
+                "max_output_tokens": 512,
+            },
+        )
+
+        if hasattr(response, "text") and response.text:
+            raw = response.text
+        else:
+            parts_text: List[str] = []
+            for cand in getattr(response, "candidates", []):
+                for part in getattr(cand.content, "parts", []):
+                    if getattr(part, "text", None):
+                        parts_text.append(part.text)
+            raw = "\n".join(parts_text)
+
+        raw = raw.strip()
+        if not raw:
+            logging.warning("Gemini returned empty caption response.")
+            return None
+
+        json_str = _extract_json(raw)
+        data = json.loads(json_str)
+
+        title = str(data.get("title", "")).strip()[:100] or "Daily News Update"
+        description = str(data.get("description", "")).strip() or title
+        hashtags = data.get("hashtags") or []
+
+        tags: List[str] = []
+        seen = set()
+        for tag in hashtags:
+            if not isinstance(tag, str):
+                continue
+            cleaned = re.sub(r"[^a-zA-Z0-9_]", "", tag.lower())
+            if not cleaned:
+                continue
+            tag_with_hash = "#" + cleaned
+            if tag_with_hash not in seen:
+                seen.add(tag_with_hash)
+                tags.append(tag_with_hash)
+        tags = tags[:15]
+
+        return title, description, tags
+
+    except Exception as e:
+        logging.warning("Gemini caption generation failed: %s", e)
+        return None
+
+def get_title_description_tags(meta: Dict[str, Any]) -> Tuple[str, str, List[str]]:
+    """
+    Decide title/description/tags for the upload.
+
+    Priority:
+    1) If Gemini can summarize from qa_text / video_script → use that.
+    2) Else, if companion JSON provides title/description/hashtags → use those.
+    3) Else, fall back to your existing heuristic logic.
+    """
+    source_text = None
+
+    if isinstance(meta.get("qa_text"), str) and meta["qa_text"].strip():
+        source_text = meta["qa_text"].strip()
+    elif isinstance(meta.get("video_script"), str) and meta["video_script"].strip():
+        source_text = meta["video_script"].strip()
+
+    topic_hint = (meta.get("title") or meta.get("topic") or "").strip() or None
+
+    if source_text:
+        ai_result = summarize_with_gemini(source_text, topic_hint=topic_hint)
+        if ai_result is not None:
+            return ai_result
+
+    meta_title = (meta.get("title") or "").strip()
+    meta_desc = (meta.get("description") or "").strip()
+    raw_tags = meta.get("hashtags") or []
+
+    if not isinstance(raw_tags, list):
+        raw_tags = [raw_tags]
+
+    tags: List[str] = []
+    for t in raw_tags:
+        if not isinstance(t, str):
+            continue
+        t = t.strip()
+        if not t:
+            continue
+        if not t.startswith("#"):
+            t = "#" + t.lstrip("#")
+        tags.append(t)
+    tags = tags[:15]
+
+    if meta_title and meta_desc:
+        return meta_title[:100], meta_desc[:4900], tags
+
+    cleaned_title = (meta.get("original_filename") or "Daily News Update").replace("_", " ").title()
+    title = cleaned_title[:100]
+    description = (
+        f"{title}\n\nStay informed with our daily news shorts.\n\n"
+        "#news #shorts #politics #dailynews"
+    )
+    if not tags:
+        tags = ["#news", "#shorts", "#politics", "#dailynews"]
+
+    return title, description, tags
+import os
 from typing import Dict, List, Tuple, Optional
 
 # Optional: only used if you call _load_json()

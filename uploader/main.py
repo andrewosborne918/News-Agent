@@ -32,7 +32,7 @@ def gcs_to_social(event):
     print(msg)
 
 # IMPORTANT: caption_utils.py must be in the same folder as main.py
-from caption_utils import build_title_and_caption, ensure_caption_dict
+from caption_utils import get_title_description_tags, ensure_caption_dict
 print("[startup] cwd:", os.getcwd())
 print("[startup] dir contents:", os.listdir(os.path.dirname(__file__)))
 
@@ -135,18 +135,13 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
             "hashtags": meta.get("hashtags") or meta.get("Tags") or [],
         }
 
-    # Build title + caption
-    try:
-        raw_title = (meta.get("title") or meta.get("Title") or "Update").strip()
-        raw_desc  = (meta.get("description") or meta.get("Description") or "").strip()
-        raw_tags  = meta.get("hashtags") or meta.get("Tags") or []
-        meta_for_builder = {"title": raw_title, "description": raw_desc, "hashtags": raw_tags}
 
-        title, caption = build_title_and_caption(meta_for_builder)
+    # Use Gemini-powered or fallback caption builder
+    try:
+        title, caption, tags = get_title_description_tags(meta)
         logger.info("caption type: %s,%s", type(title).__name__, type(caption).__name__)
-        tags = meta_for_builder.get("hashtags") or []
     except Exception as e:
-        logger.exception("ERROR: caption build failed: %s", e)
+        logger.exception("ERROR: get_title_description_tags failed: %s", e)
         title = (meta.get("title") or meta.get("Title") or "Update").strip()
         caption = (meta.get("description") or meta.get("Description") or "").strip()
         tags = meta.get("hashtags") or meta.get("Tags") or []
