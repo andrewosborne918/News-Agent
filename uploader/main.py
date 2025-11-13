@@ -17,7 +17,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, ResumableUploadError
-from google.auth.transport import requests as google_auth_requests  # <--- THIS IS THE NEW IMPORT
+from google.auth.transport import requests as google_auth_requests
 # -------------------------------
 
 import functions_framework
@@ -67,6 +67,7 @@ def gcs_to_social(event):
         print(f"skip: not a metadata JSON -> bucket={bucket} name={name}")
         return
 
+    # 1. Check if job is already done (Idempotency)
     if _marker_exists(bucket, name, ".posted"):
         print(f"skip: already posted (marker file exists) -> {name}")
         return
@@ -75,8 +76,20 @@ def gcs_to_social(event):
         print(f"skip: already failed (marker file exists) -> {name}")
         return
 
-    msg, _status = _process_metadata_json(bucket, name)
-    print(msg)
+    # 2. Check if job is currently running (Locking)
+    if _marker_exists(bucket, name, ".processing"):
+        print(f"skip: currently processing (lock file exists) -> {name}")
+        return
+
+    # 3. Set Lock
+    _create_post_marker(bucket, name, ".processing", "Processing started")
+
+    try:
+        msg, _status = _process_metadata_json(bucket, name)
+        print(msg)
+    finally:
+        # 4. Release Lock (Always cleanup the .processing file)
+        _delete_marker(bucket, name, ".processing")
 
 print("[startup] cwd:", os.getcwd())
 print("[startup] dir contents:", os.listdir(os.path.dirname(__file__)))
@@ -105,7 +118,7 @@ def _marker_exists(bucket_name: str, json_blob_name: str, suffix: str) -> bool:
 
 
 def _create_post_marker(bucket_name: str, json_blob_name: str, suffix: str, content: str = ""):
-    """Create an idempotency marker <base>.posted or <base>.failed."""
+    """Create an idempotency marker <base>.posted, <base>.failed, or <base>.processing."""
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     base_no_ext = os.path.splitext(json_blob_name)[0]
@@ -120,6 +133,19 @@ def _create_post_marker(bucket_name: str, json_blob_name: str, suffix: str, cont
     except Exception as e:
         print(f"[marker] ERROR: failed to create marker {marker_key}: {e}")
 
+def _delete_marker(bucket_name: str, json_blob_name: str, suffix: str):
+    """Delete a marker file (used for cleaning up .processing lock)."""
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    base_no_ext = os.path.splitext(json_blob_name)[0]
+    marker_key = f"{base_no_ext}{suffix}"
+    marker_blob = bucket.blob(marker_key)
+    try:
+        if marker_blob.exists():
+            marker_blob.delete()
+            print(f"[marker] deleted marker {marker_key}")
+    except Exception as e:
+        print(f"[marker] warning: failed to delete marker {marker_key}: {e}")
 
 def _load_json(bucket_name: str, json_blob_name: str) -> Dict[str, Any]:
     """Download and parse a companion JSON from GCS."""
