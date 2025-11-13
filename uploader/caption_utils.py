@@ -197,7 +197,6 @@ def summarize_with_gemini(
             # Normalize hashtags to ['#tag1', '#tag2', ...]
             tags: List[str] = []
             seen = set()
-
             for tag in hashtags:
                 if not isinstance(tag, str):
                     continue
