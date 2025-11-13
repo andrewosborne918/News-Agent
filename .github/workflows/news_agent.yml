@@ -2,8 +2,8 @@ name: News Agent (politics)
 
 on:
   schedule:
-    # 6am, 9am, 12pm, 3pm, 6pm EST (Detroit) = 11, 14, 17, 20, 23 UTC
-    - cron: "0 11,14,17,20,23 * * *"
+    # Runs every hour from 6am to 10pm EST (11:00 UTC to 03:00 UTC)
+    - cron: "0 0-3,11-23 * * *"
   workflow_dispatch:
 
 jobs:
