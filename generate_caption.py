@@ -13,6 +13,33 @@ import json
 from pathlib import Path
 import google.generativeai as genai
 
+# --- ADD THIS HELPER FUNCTION ---
+from google.api_core.exceptions import ResourceExhausted, InternalServerError
+
+def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
+    """
+    Tries to generate content with the primary model.
+    If a rate limit error occurs, it falls back to the secondary model.
+    """
+    try:
+        # 1. Try the primary model
+        # print(f"Attempting with primary model: {primary_model_name}")
+        model = genai.GenerativeModel(primary_model_name)
+        return model.generate_content(prompt)
+    except (ResourceExhausted, InternalServerError) as e:
+        # 2. If rate limited, try the fallback
+        print(f"⚠️  Rate limit on {primary_model_name}, trying fallback {fallback_model_name}. Error: {e}")
+        try:
+            model = genai.GenerativeModel(fallback_model_name)
+            return model.generate_content(prompt)
+        except Exception as fallback_e:
+            print(f"❌ Fallback model {fallback_model_name} also failed.")
+            raise fallback_e # Re-raise the fallback error
+    except Exception as e:
+        # 3. Handle other (non-rate-limit) errors
+        print(f"❌ Non-rate-limit error on {primary_model_name}.")
+        raise e # Re-raise the original error
+
 
 def load_article_data(data_dir="generated"):
     """Load the article data from the generated JSON file."""
@@ -56,9 +83,8 @@ def generate_caption_with_ai(segments, api_key, article_data=None):
     
     genai.configure(api_key=api_key)
     # --- THIS IS THE FIX ---
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    # model = genai.GenerativeModel('gemini-2.5-flash') # <-- No longer need this
     # -----------------------
-    
     # Combine segments into a summary
     content = "\n".join(segments)
     
@@ -98,7 +124,11 @@ Rules:
 - Make it shareable and clickable."""
 
     try:
-        response = model.generate_content(prompt)
+        response = generate_with_fallback(
+            prompt,
+            primary_model_name='gemini-2.5-flash',
+            fallback_model_name='gemini-2.0-flash-lite'
+        )
         text = response.text.strip()
         
         # Extract JSON from response (handle markdown code blocks)

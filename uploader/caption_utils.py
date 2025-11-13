@@ -9,6 +9,33 @@ import gspread # <-- IMPORT IS AT THE TOP
 from google.cloud import secretmanager
 import google.generativeai as genai
 
+# --- ADD THIS HELPER FUNCTION ---
+from google.api_core.exceptions import ResourceExhausted, InternalServerError
+
+def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
+    """
+    Tries to generate content with the primary model.
+    If a rate limit error occurs, it falls back to the secondary model.
+    """
+    try:
+        # 1. Try the primary model
+        # print(f"Attempting with primary model: {primary_model_name}")
+        model = genai.GenerativeModel(primary_model_name)
+        return model.generate_content(prompt)
+    except (ResourceExhausted, InternalServerError) as e:
+        # 2. If rate limited, try the fallback
+        print(f"⚠️  Rate limit on {primary_model_name}, trying fallback {fallback_model_name}. Error: {e}")
+        try:
+            model = genai.GenerativeModel(fallback_model_name)
+            return model.generate_content(prompt)
+        except Exception as fallback_e:
+            print(f"❌ Fallback model {fallback_model_name} also failed.")
+            raise fallback_e # Re-raise the fallback error
+    except Exception as e:
+        # 3. Handle other (non-rate-limit) errors
+        print(f"❌ Non-rate-limit error on {primary_model_name}.")
+        raise e # Re-raise the original error
+
 # --- Caching and Helpers ---
 _GEMINI_API_KEY_CACHE: Optional[str] = None
 logger = logging.getLogger(__name__)
@@ -173,7 +200,7 @@ def summarize_with_gemini(
     
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("models/gemini-1.5-flash")
+        # model = genai.GenerativeModel("models/gemini-1.5-flash") # <-- No longer need this
     except Exception as e:
         logger.error(f"[gemini] Failed to configure model: {e}")
         return None
@@ -198,7 +225,11 @@ def summarize_with_gemini(
     """
     
     try:
-        response = model.generate_content(prompt)
+        response = generate_with_fallback(
+            prompt,
+            primary_model_name='gemini-2.5-flash',    # <-- Updated primary model
+            fallback_model_name='gemini-2.0-flash-lite' # <-- Added fallback
+        )
         json_text = _extract_json(response.text)
         ai_data = json.loads(json_text)
         
