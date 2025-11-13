@@ -239,7 +239,7 @@ def main():
     # Format for different platforms
     formatted = format_for_social_media(caption_data, platform="twitter")
     print(f"\n{formatted}")
-    print("\n"S" + "="*60)
+    print("\n" + "="*60)
     
     # Save caption data
     save_caption_data(caption_data)
