@@ -277,7 +277,7 @@ def get_title_description_tags(meta: Dict) -> Tuple[str, str, List[str]]:
     if not hashtags_list:
         hashtags_list = ["News", "Politics", "BreakingNews"] # Final fallback tags
 
-    final_tags = _normalize_Ahashtags(hashtags_list)
+    final_tags = _normalize_hashtags(hashtags_list)
     
     # Truncate for platform limits
     final_title = title[:100] # YouTube limit

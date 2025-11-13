@@ -239,7 +239,7 @@ def _upload_youtube(local_filename: str, title: str, description: str, tags: lis
                 "categoryId": "25" # 25 = News & Politics
             },
             "status": {
-                "privacyStatus": "private" # "private", "public", or "unlisted"
+                "privacyStatus": "public" # "private", "public", or "unlisted"
             }
         }
 
