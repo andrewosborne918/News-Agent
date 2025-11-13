@@ -16,3 +16,6 @@ google-generativeai>=0.8.1
 
 # Misc
 requests>=2.31.0
+
+# Google Sheets
+gspread>=5.0.0

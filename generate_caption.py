@@ -40,6 +40,16 @@ def load_segments_data(data_dir="generated"):
     
     return segments
 
+# --- ADDED: FUNCTION TO READ RUN_ID ---
+def load_run_id(data_dir="generated"):
+    """Load the run_id from the generated text file."""
+    run_id_file = Path(data_dir) / "run_id.txt"
+    if run_id_file.exists():
+        with open(run_id_file, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    print("⚠️  Warning: generated/run_id.txt not found.")
+    return None
+# --------------------------------------
 
 def generate_caption_with_ai(segments, api_key, article_data=None):
     """Use Gemini to generate a compelling caption from the video segments."""
@@ -192,6 +202,7 @@ def main():
     # Load segments and article data
     segments = load_segments_data(data_dir)
     article_data = load_article_data(data_dir)
+    run_id = load_run_id(data_dir) # <-- ADDED
     
     if not segments:
         print("❌ No segments found. Make sure video has been generated.")
@@ -200,10 +211,17 @@ def main():
     print(f"✅ Loaded {len(segments)} segments")
     if article_data:
         print(f"✅ Loaded article data: {article_data['title']}")
+    if run_id:
+        print(f"✅ Loaded run_id: {run_id}") # <-- ADDED
     
     # Generate caption with AI
     print("🤖 Generating caption with AI...")
     caption_data = generate_caption_with_ai(segments, api_key, article_data)
+    
+    # --- ADDED: INJECT THE RUN_ID ---
+    if run_id:
+        caption_data["run_id"] = run_id
+    # ---------------------------------
     
     # Display results
     print("\n" + "="*60)
@@ -212,6 +230,8 @@ def main():
     print(f"\n🎯 TITLE:\n{caption_data['title']}")
     print(f"\n📝 DESCRIPTION:\n{caption_data['description']}")
     print(f"\n🏷️  HASHTAGS:\n{' '.join(['#' + tag for tag in caption_data['hashtags']])}")
+    if "run_id" in caption_data: # <-- ADDED
+        print(f"\n🆔 RUN_ID:\n{caption_data['run_id']}") # <-- ADDED
     print("\n" + "="*60)
     print("📱 FORMATTED FOR SOCIAL MEDIA")
     print("="*60)
@@ -219,7 +239,7 @@ def main():
     # Format for different platforms
     formatted = format_for_social_media(caption_data, platform="twitter")
     print(f"\n{formatted}")
-    print("\n" + "="*60)
+    print("\n"S" + "="*60)
     
     # Save caption data
     save_caption_data(caption_data)

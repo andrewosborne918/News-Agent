@@ -450,7 +450,7 @@ def main():
     ap.add_argument("--image-path-prefix", default="", help="Prefix to pre-fill image_path")
     ap.add_argument("--max-words", type=int, default=15, help="Max words per sentence")
     ap.add_argument("--min-words", type=int, default=10, help="Min words per sentence (combine shorter ones)")
-    ap.add_argument("--model", default="gemini-2.5-flash", help="Gemini model")
+    ap.add_argument("--model", default="gemini-1.5-flash", help="Gemini model") # Use 1.5-flash
 
     args = ap.parse_args()
     sheet_key, _, _ = load_env_or_die()
@@ -468,10 +468,15 @@ def main():
             sys.exit("Could not pick a top story. Check NEWSDATA_API_KEY or adjust --country/--topic/--query.")
         url, title, published_at, score = picked
         print(f"[auto] Picked: {title} ({url}) score={score:.3f} published={published_at.isoformat()}Z")
-        save_article_data(url, title)
+        save_article_data(url, title) # This was already in your new file, which is great
 
     if not url:
         sys.exit("No story URL provided. Use --auto or pass --story_url.")
+    
+    # --- ENSURE 'generated' FOLDER EXISTS ---
+    # This is run by the workflow, but good to have here too
+    os.makedirs("generated", exist_ok=True) 
+    # ----------------------------------------
 
     # Open sheet & ensure tabs
     sh = open_sheet(sheet_key)
@@ -527,6 +532,15 @@ def main():
         pass
 
     print(f"✅ Wrote {len(rows_to_append)} sentence segments for run {run_id}")
+
+    # --- ADDED: SAVE THE RUN_ID FOR OTHER SCRIPTS ---
+    try:
+        with open("generated/run_id.txt", "w", encoding="utf-8") as f:
+            f.write(run_id)
+        print(f"✅ Saved run_id to generated/run_id.txt")
+    except Exception as e:
+        print(f"⚠️  Could not save run_id.txt: {e}")
+    # -------------------------------------------------
 
 if __name__ == "__main__":
     main()

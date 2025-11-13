@@ -25,6 +25,12 @@ if article_file.exists():
     except (json.JSONDecodeError, KeyError):
         pass
 
+# --- DEFAULTS ---
+title = article_title
+description = "Stay informed with our daily news shorts."
+tags = ["news", "politics", "shorts", "breaking", "daily update"]
+run_id = None # <-- ADDED
+
 # Try to parse as JSON first (from generate_caption.py)
 if caption_file.exists():
     try:
@@ -35,6 +41,8 @@ if caption_file.exists():
         # Convert hashtags to tags (remove # symbol)
         hashtags = caption_data.get("hashtags", [])
         tags = [tag.lstrip('#') for tag in hashtags] if hashtags else ["news", "politics", "shorts", "breaking"]
+        run_id = caption_data.get("run_id") # <-- ADDED: Get the run_id
+        
     except (json.JSONDecodeError, KeyError):
         # Fallback: treat as plain text
         caption = caption_file.read_text(encoding="utf-8")
@@ -45,11 +53,11 @@ if caption_file.exists():
         tags = ["news", "politics", "shorts", "breaking", "daily update"]
 else:
     # No caption file - use defaults
-    title = article_title
-    description = "Stay informed with our daily news shorts."
-    tags = ["news", "politics", "shorts", "breaking", "daily update"]
+    pass # Defaults from above are used
 
-out = {"title": title, "description": description, "tags": tags}
+# --- ADDED: Add run_id to the final JSON ---
+out = {"title": title, "description": description, "tags": tags, "run_id": run_id}
+
 out_path = pathlib.Path(f"generated/news_video_{ts}.json")
 out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
-print(f"Written metadata JSON: {out_path}\nTitle: {title}\nDescription preview: {description[:120]}...")
+print(f"Written metadata JSON: {out_path}\nTitle: {title}\nDescription preview: {description[:120]}...\nRun ID: {run_id}")
