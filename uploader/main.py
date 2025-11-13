@@ -33,7 +33,6 @@ def gcs_to_social(event):
     print(msg)
 
 # IMPORTANT: caption_utils.py must be in the same folder as main.py
-from caption_utils import get_title_description_tags, ensure_caption_dict
 print("[startup] cwd:", os.getcwd())
 print("[startup] dir contents:", os.listdir(os.path.dirname(__file__)))
 
