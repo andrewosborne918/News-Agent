@@ -11,17 +11,20 @@ import requests
 
 from google.cloud import storage, secretmanager
 from google.api_core.exceptions import NotFound, Conflict, PreconditionFailed
+
+# --- NEW IMPORTS FOR YOUTUBE ---
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, ResumableUploadError
+from google.auth.transport import requests as google_auth_requests  # <--- THIS IS THE NEW IMPORT
+# -------------------------------
 
 import functions_framework
 
 _SECRET_CACHE: Dict[str, str] = {}
 
 logger = logging.getLogger(__name__)
-# The PROJECT_ID will now be set by the --set-env-vars flag in your workflow
 PROJECT_ID = os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
 
 
@@ -32,7 +35,6 @@ def _get_secret(secret_name: str) -> Optional[str]:
         return _SECRET_CACHE[secret_name]
 
     if not PROJECT_ID:
-        # This check will now pass, but it's good to keep
         logger.error("GCP_PROJECT environment variable not set. Cannot fetch secrets.")
         return None
 
@@ -204,9 +206,7 @@ def _upload_youtube(local_filename: str, title: str, description: str, tags: lis
     creds_json_str = _get_secret("YOUTUBE_CREDENTIALS_JSON")
     if not creds_json_str:
         logger.error("[youtube] FATAL: YOUTUBE_CREDENTIALS_JSON secret is missing.")
-        # --- THIS IS THE FIX ---
         raise Exception("YOUTUBE_CREDENTIALS_JSON secret is missing.")
-        # -----------------------
 
     try:
         creds_data = json.loads(creds_json_str)
@@ -219,7 +219,10 @@ def _upload_youtube(local_filename: str, title: str, description: str, tags: lis
             scopes=["https://www.googleapis.com/auth/youtube.upload"]
         )
         
-        creds.refresh(requests.Request())
+        # --- THIS IS THE FIX ---
+        # We must use the transport object from google.auth, not requests
+        creds.refresh(google_auth_requests.Request())
+        # -----------------------
         
         youtube = build("youtube", "v3", credentials=creds)
         
@@ -273,9 +276,7 @@ def _upload_facebook(local_filename: str, title: str, description: str):
     
     if not page_token or not page_id:
         logger.error("[facebook] FATAL: FACEBOOK_PAGE_TOKEN or FB_PAGE_ID secrets are missing.")
-        # --- THIS IS THE FIX ---
         raise Exception("FACEBOOK_PAGE_TOKEN or FB_PAGE_ID secrets are missing.")
-        # -----------------------
 
     url = f"https://graph-video.facebook.com/v20.0/{page_id}/videos"
     fb_description = f"{title}\n\n{description}"
