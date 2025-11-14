@@ -10,13 +10,12 @@ for social media platforms (Twitter, Instagram, Facebook, LinkedIn).
 import os
 import sys
 import json
-import time
+import time # <-- ADDED THIS IMPORT
 from pathlib import Path
 import google.generativeai as genai
-
-# --- ADD THIS HELPER FUNCTION ---
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 
+# --- THIS IS THE CORRECTED, SINGLE FUNCTION ---
 def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
     """
     Tries to generate content with the primary model.
@@ -102,9 +101,8 @@ def generate_caption_with_ai(segments, api_key, article_data=None):
     """Use Gemini to generate a compelling caption from the video segments."""
     
     genai.configure(api_key=api_key)
-    # --- THIS IS THE FIX ---
-    # model = genai.GenerativeModel('gemini-2.5-flash') # <-- No longer need this
-    # -----------------------
+    # model = genai.GenerativeModel('gemini-2.5-flash') # <-- This line is no longer needed
+    
     # Combine segments into a summary
     content = "\n".join(segments)
     
@@ -146,8 +144,8 @@ Rules:
     try:
         response = generate_with_fallback(
             prompt,
-            primary_model_name='gemini-2.5-flash',
-            fallback_model_name='gemini-2.0-flash-lite'
+            primary_model_name='gemini-1.5-flash', # <-- Corrected primary model
+            fallback_model_name='gemini-pro' # <-- FIXED FALLBACK
         )
         text = response.text.strip()
         

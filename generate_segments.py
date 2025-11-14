@@ -21,7 +21,7 @@ Google Sheet tabs expected:
 import os
 import sys
 import re
-import time
+import time # This was already here, which is good.
 import argparse
 import datetime as dt
 import json
@@ -35,25 +35,10 @@ from dotenv import load_dotenv
 import gspread
 import google.generativeai as genai
 from gspread.exceptions import APIError
-# 1. ADD THIS
-import time
-# --- ADD THIS HELPER FUNCTION ---
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 
+# --- THIS IS THE CORRECTED, SINGLE FUNCTION ---
 def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
-    """
-    Tries to generate content with the primary model.
-    If a rate limit error occurs, it falls back to the secondary model.
-    """
-    try:
-        # 1. Try the primary model
-        # print(f"Attempting with primary model: {primary_model_name}")
-        model = genai.GenerativeModel(primary_model_name)
-        return model.generate_content(prompt)
-    except (ResourceExhausted, InternalServerError) as e:
-        # 2. If rate limited, try the fallback
-        print(f"⚠️  Rate limit on {primary_model_name}, trying fallback {fallback_model_name}. Error: {e}")
-        try:def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
     """
     Tries to generate content with the primary model.
     - If a rate limit error (429) occurs, it pauses for 61 seconds and retries.
@@ -95,15 +80,6 @@ def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
         except Exception as fallback_e:
             print(f"❌ Fallback model {fallback_model_name} also failed.")
             raise fallback_e # Re-raise the fallback error
-            model = genai.GenerativeModel(fallback_model_name)
-            return model.generate_content(prompt)
-        except Exception as fallback_e:
-            print(f"❌ Fallback model {fallback_model_name} also failed.")
-            raise fallback_e # Re-raise the fallback error
-    except Exception as e:
-        # 3. Handle other (non-rate-limit) errors
-        print(f"❌ Non-rate-limit error on {primary_model_name}.")
-        raise e # Re-raise the original error
 
 # Auto-pick support (NewsData.io). Ensure news_picker.py is in the same folder.
 try:
@@ -418,7 +394,7 @@ Photo search terms (2-4 words only):"""
         resp = generate_with_fallback(
             prompt,
             primary_model_name=model_name,
-            fallback_model_name="gemini-1.0-pro" # Updated fallback
+            fallback_model_name="gemini-pro" # <-- FIXED FALLBACK
         )
         suggestion = (resp.text or "").strip().strip('"').strip("'")
         
@@ -485,7 +461,7 @@ def gemini_answer(question: str, article: str, model_name: str) -> str:
         resp = generate_with_fallback(
             prompt,
             primary_model_name=model_name,
-            fallback_model_name="gemini-1.0-pro" # Updated fallback
+            fallback_model_name="gemini-pro" # <-- FIXED FALLBACK
         )
         txt = (resp.text or "").strip()
         if txt:
