@@ -347,9 +347,4 @@ def get_title_description_tags(meta: Dict) -> Tuple[str, str, List[str]]:
     final_title = title[:100] # YouTube limit
     final_description = description[:5000] # YouTube limit
 
-    return final_title, final_description, final_tags    if _marker_exists(bucket, name, ".posted"):
-        # Should skip if already posted
-    if _marker_exists(bucket, name, ".failed"):
-        # Should skip if already failed
-    if _marker_exists(bucket, name, ".processing"):
-        # Should skip if already processing
+    return final_title, final_description, final_tags
