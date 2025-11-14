@@ -260,7 +260,7 @@ def summarize_with_gemini(
     try:
         response = generate_with_fallback(
             prompt,
-            primary_model_name='gemini-2.0-flash-lite', # <-- FIXED PRIMARY
+            primary_model_name='gemini-2.0-flash', # <-- FIXED PRIMARY
             fallback_model_name='gemini-2.5-pro' # <-- FIXED FALLBACK
         )
         json_text = _extract_json(response.text)
@@ -347,4 +347,9 @@ def get_title_description_tags(meta: Dict) -> Tuple[str, str, List[str]]:
     final_title = title[:100] # YouTube limit
     final_description = description[:5000] # YouTube limit
 
-    return final_title, final_description, final_tags
+    return final_title, final_description, final_tags    if _marker_exists(bucket, name, ".posted"):
+        # Should skip if already posted
+    if _marker_exists(bucket, name, ".failed"):
+        # Should skip if already failed
+    if _marker_exists(bucket, name, ".processing"):
+        # Should skip if already processing
