@@ -543,7 +543,7 @@ def main():
             img_path = image_url if not args.image_path_prefix else f"{args.image_path_prefix}{run_id}_{qid}_{idx}.png"
             rows_to_append.append([run_id, qid, idx, sent, img_path, args.duration])
             
-        if gemini_request_count % 9 == 0 and gemini_request_count < len(questions):
+        if gemini_request_count % 4 == 0 and gemini_request_count < len(questions):
             print("⏳ Pausing for 60 seconds to avoid Gemini rate limit...")
             time.sleep(60)
             
