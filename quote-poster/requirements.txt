@@ -1,8 +1,6 @@
 functions-framework
 google-cloud-secret-manager
 google-cloud-aiplatform
-google-cloud-logging
-google-api-python-client
 google-auth-httplib2
 requests
 Pillow
