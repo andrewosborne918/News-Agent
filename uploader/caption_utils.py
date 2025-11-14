@@ -3,6 +3,7 @@ import json
 import os
 import logging
 import re
+import time
 from typing import Dict, Any, List, Tuple, Optional
 
 import gspread # <-- IMPORT IS AT THE TOP
@@ -16,26 +17,45 @@ from google.api_core.exceptions import ResourceExhausted, InternalServerError
 def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
     """
     Tries to generate content with the primary model.
-    If a rate limit error occurs, it falls back to the secondary model.
+    - If a rate limit error (429) occurs, it pauses for 61 seconds and retries.
+    - If another error (like 500) occurs, it tries the fallback model.
     """
     try:
         # 1. Try the primary model
-        # print(f"Attempting with primary model: {primary_model_name}")
         model = genai.GenerativeModel(primary_model_name)
         return model.generate_content(prompt)
-    except (ResourceExhausted, InternalServerError) as e:
-        # 2. If rate limited, try the fallback
-        print(f"⚠️  Rate limit on {primary_model_name}, trying fallback {fallback_model_name}. Error: {e}")
+    
+    except ResourceExhausted as e:
+        # 2. If rate limited (429), PAUSE and RETRY
+        print(f"⚠️  Rate limit on {primary_model_name}. Pausing for 61 seconds... Error: {e}")
+        time.sleep(61) # Pause for 61 seconds to be safe
+        print(f"⌛ Retrying with {primary_model_name}...")
+        try:
+            model = genai.GenerativeModel(primary_model_name)
+            return model.generate_content(prompt) # Retry the primary model
+        except Exception as retry_e:
+            print(f"❌ Retry with {primary_model_name} also failed.")
+            raise retry_e # Re-raise the error after retry
+    
+    except (InternalServerError) as e:
+        # 3. If it's a server error (500s), try the fallback
+        print(f"⚠️  Internal Server Error on {primary_model_name}, trying fallback {fallback_model_name}. Error: {e}")
         try:
             model = genai.GenerativeModel(fallback_model_name)
             return model.generate_content(prompt)
         except Exception as fallback_e:
             print(f"❌ Fallback model {fallback_model_name} also failed.")
             raise fallback_e # Re-raise the fallback error
+            
     except Exception as e:
-        # 3. Handle other (non-rate-limit) errors
-        print(f"❌ Non-rate-limit error on {primary_model_name}.")
-        raise e # Re-raise the original error
+        # 4. Handle other (non-rate-limit) errors by trying fallback
+        print(f"❌ Non-rate-limit error on {primary_model_name}, trying fallback {fallback_model_name}. Error: {e}")
+        try:
+            model = genai.GenerativeModel(fallback_model_name)
+            return model.generate_content(prompt)
+        except Exception as fallback_e:
+            print(f"❌ Fallback model {fallback_model_name} also failed.")
+            raise fallback_e # Re-raise the fallback error
 
 # --- Caching and Helpers ---
 _GEMINI_API_KEY_CACHE: Optional[str] = None
