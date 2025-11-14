@@ -260,8 +260,8 @@ def summarize_with_gemini(
     try:
         response = generate_with_fallback(
             prompt,
-            primary_model_name='gemini-1.5-flash',
-            fallback_model_name='gemini-pro' # <-- FIXED FALLBACK
+            primary_model_name='gemini-2.0-flash-lite', # <-- FIXED PRIMARY
+            fallback_model_name='gemini-2.5-pro' # <-- FIXED FALLBACK
         )
         json_text = _extract_json(response.text)
         ai_data = json.loads(json_text)

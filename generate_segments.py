@@ -394,7 +394,7 @@ Photo search terms (2-4 words only):"""
         resp = generate_with_fallback(
             prompt,
             primary_model_name=model_name,
-            fallback_model_name="gemini-pro" # <-- FIXED FALLBACK
+            fallback_model_name="gemini-2.5-pro" # <-- Fallback is now 2.5 Pro
         )
         suggestion = (resp.text or "").strip().strip('"').strip("'")
         
@@ -461,7 +461,7 @@ def gemini_answer(question: str, article: str, model_name: str) -> str:
         resp = generate_with_fallback(
             prompt,
             primary_model_name=model_name,
-            fallback_model_name="gemini-pro" # <-- FIXED FALLBACK
+            fallback_model_name="gemini-2.5-pro" # <-- Fallback is now 2.5 Pro
         )
         txt = (resp.text or "").strip()
         if txt:
@@ -493,7 +493,7 @@ def main():
     ap.add_argument("--min-words", type=int, default=10, help="Min words per sentence (combine shorter ones)")
     
     # --- THIS IS THE FIX ---
-    ap.add_argument("--model", default="gemini-1.5-flash", help="Gemini model")
+    ap.add_argument("--model", default="gemini-2.0-flash-lite", help="Gemini model") # <-- FIXED DEFAULT
     # -----------------------
 
     args = ap.parse_args()

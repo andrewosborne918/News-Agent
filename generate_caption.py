@@ -144,8 +144,8 @@ Rules:
     try:
         response = generate_with_fallback(
             prompt,
-            primary_model_name='gemini-1.5-flash', # <-- Corrected primary model
-            fallback_model_name='gemini-pro' # <-- FIXED FALLBACK
+            primary_model_name='gemini-2.0-flash-lite', # <-- FIXED PRIMARY
+            fallback_model_name='gemini-2.5-pro' # <-- FIXED FALLBACK
         )
         text = response.text.strip()
         
