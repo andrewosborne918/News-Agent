@@ -92,7 +92,7 @@ def pick_top_story_from_sources(country: str, category: str, query: str = None) 
             "country": country,
             "category": category,
             "language": "en",
-            "domain": domains,  # <-- Use the chunk of 5 domains
+            "domainurl": domains,  # <-- THIS IS THE FIX (was 'domain')
         }
         if query:
             params["q"] = query
