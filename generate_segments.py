@@ -36,7 +36,7 @@ import google.generativeai as genai
 from gspread.exceptions import APIError
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 
-# --- NEW: Define the list of approved news sources ---
+# --- List of approved news sources ---
 TARGET_SOURCES = [
     "foxnews.com",
     "breitbart.com",
@@ -53,11 +53,13 @@ TARGET_SOURCES = [
 ]
 # ----------------------------------------------------
 
-# --- NEW: Function to pick stories only from target sources ---
+# --- THIS IS THE CORRECTED, UPDATED FUNCTION ---
 def pick_top_story_from_sources(country: str, category: str, query: str = None) -> Tuple[str, str, dt.datetime, float]:
     """
     Picks a top story *only* from the predefined TARGET_SOURCES list
     using the NewsData.io API.
+    
+    Handles API limit of 5 domains per request by chunking the list.
     
     Returns:
         (url, title, published_at, score) or None
@@ -69,62 +71,83 @@ def pick_top_story_from_sources(country: str, category: str, query: str = None) 
 
     base_url = "https://newsdata.io/api/1/news"
     
-    # Join the domains into a comma-separated string for the API
-    domains = ",".join(TARGET_SOURCES)
+    # NewsData.io has a limit of 5 domains per request on free/basic plans
+    DOMAIN_CHUNK_SIZE = 5
     
-    params = {
-        "apikey": api_key,
-        "country": country,
-        "category": category,
-        "language": "en",
-        "domain": domains,          # <-- This is the most important part
-        "prioritydomain": domains   # <-- Tells API to prefer these sources
-    }
-    if query:
-        params["q"] = query
-        
-    print(f"ℹ️  Searching for top story from: {domains}...")
-        
-    try:
-        response = requests.get(base_url, params=params, timeout=15)
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-        data = response.json()
-        
-        if data.get("status") == "success" and data.get("totalResults", 0) > 0:
-            # Take the first (most recent/relevant) article
-            article = data["results"][0]
-            
-            url = article.get("link")
-            title = article.get("title")
-            
-            # Parse publish date
-            pub_date_str = article.get("pubDate", "")
-            published_at = dt.datetime.utcnow() # Fallback
-            try:
-                # NewsData.io format is 'YYYY-MM-DD HH:MM:SS'
-                published_at = dt.datetime.strptime(pub_date_str, '%Y-%m-%d %H:%M:%S')
-            except (ValueError, TypeError):
-                pass # Use fallback
+    # Split the target sources into chunks of 5
+    domain_chunks = [
+        TARGET_SOURCES[i:i + DOMAIN_CHUNK_SIZE]
+        for i in range(0, len(TARGET_SOURCES), DOMAIN_CHUNK_SIZE)
+    ]
+    
+    all_top_articles = []
+    
+    print(f"ℹ️  Searching for top story... Will make {len(domain_chunks)} API request(s).")
 
-            # NewsData.io doesn't provide a 'score'. We'll use 1.0
-            score = 1.0 
+    for i, chunk in enumerate(domain_chunks):
+        domains = ",".join(chunk)
+        
+        params = {
+            "apikey": api_key,
+            "country": country,
+            "category": category,
+            "language": "en",
+            "domain": domains,  # <-- Use the chunk of 5 domains
+        }
+        if query:
+            params["q"] = query
             
-            if not url or not title:
-                print("❌ API returned article with missing URL or Title.")
-                return None
+        print(f"  -> Request {i+1}/{len(domain_chunks)} (Sources: {domains})")
+            
+        try:
+            response = requests.get(base_url, params=params, timeout=15)
+            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+            data = response.json()
+            
+            if data.get("status") == "success" and data.get("totalResults", 0) > 0:
+                # Get the top article from this chunk's results
+                article = data["results"][0]
+                pub_date_str = article.get("pubDate", "")
                 
-            return (url, title, published_at, score)
-            
-        else:
-            print(f"⚠️  No articles found from target sources. (API status: {data.get('status')})")
-            return None
-            
-    except requests.exceptions.RequestException as e:
-        print(f"❌ API call to NewsData.io failed: {e}")
+                # Parse publish date
+                published_at = dt.datetime.min # Fallback for sorting
+                try:
+                    # NewsData.io format is 'YYYY-MM-DD HH:MM:SS'
+                    published_at = dt.datetime.strptime(pub_date_str, '%Y-%m-%d %H:%M:%S')
+                except (ValueError, TypeError):
+                    pass 
+                
+                all_top_articles.append((published_at, article))
+                
+            else:
+                print(f"  -> No articles found for this chunk.")
+                
+        except requests.exceptions.RequestException as e:
+            # Log the error but continue to the next chunk
+            print(f"❌ API call for chunk {i+1} failed: {e}")
+        except Exception as e:
+            print(f"❌ Error parsing response for chunk {i+1}: {e}")
+
+    # --- After checking all chunks, find the newest article ---
+    if not all_top_articles:
+        print("⚠️  No articles found from any of the target sources.")
         return None
-    except Exception as e:
-        print(f"❌ Error parsing NewsData.io response: {e}")
+        
+    # Sort the list of articles by their datetime (newest first)
+    all_top_articles.sort(key=lambda x: x[0], reverse=True)
+    
+    # Get the data from the newest article
+    newest_article_datetime, newest_article_data = all_top_articles[0]
+    
+    url = newest_article_data.get("link")
+    title = newest_article_data.get("title")
+    score = 1.0 # We'll use 1.0 since we're just picking the newest
+    
+    if not url or not title:
+        print("❌ API returned article with missing URL or Title.")
         return None
+        
+    return (url, title, newest_article_datetime, score)
 # -------------------------------------------------------------
 
 
@@ -596,8 +619,13 @@ def main():
         if not picked:
             sys.exit("❌ Could not pick a top story from the defined sources. Check NEWSDATA_API_KEY or API logs.")
         
-        url, title, published_at, score = picked
-        print(f"[auto] Picked: {title} ({url}) score={score:.3f} published={published_at.isoformat()}Z")
+        # Note: 'published_at' is now a datetime object from the new function
+        url, title, published_at_dt, score = picked
+        
+        # Convert datetime object to string for saving
+        published_at_str = published_at_dt.isoformat() + "Z" if published_at_dt else dt.datetime.utcnow().isoformat() + "Z"
+
+        print(f"[auto] Picked: {title} ({url}) score={score:.3f} published={published_at_str}")
         save_article_data(url, title)
     # ---------------------------------------------------------------------
 
@@ -657,9 +685,13 @@ def main():
 
     # Write run row (best-effort)
     try:
+        # Get the 'published_at_str' from the --auto block if it exists, otherwise use now()
+        run_published_at = published_at_str if args.auto and 'published_at_str' in locals() else dt.datetime.utcnow().isoformat() + "Z"
+        run_score = score if args.auto and 'score' in locals() else 0.0
+
         ws_runs = _with_retry(lambda: sh.worksheet("Runs"))
         _with_retry(lambda: ws_runs.append_rows([[
-            run_id, url, title or "", dt.datetime.utcnow().isoformat() + "Z", 0.0
+            run_id, url, title or "", run_published_at, run_score
         ]], value_input_option="RAW"))
     except Exception:
         pass
