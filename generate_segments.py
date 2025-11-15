@@ -598,7 +598,7 @@ def main():
 
     # Output / model settings
     ap.add_argument("--duration", type=float, default=4.0, help="Seconds each sentence is shown")
-    ap.add_argument("--image-path-prefix", default="", help="Prefix to pre-fill image_path")
+    ap.add_address_argument("--image-path-prefix", default="", help="Prefix to pre-fill image_path")
     ap.add_argument("--max-words", type=int, default=15, help="Max words per sentence")
     ap.add_argument("--min-words", type=int, default=10, help="Min words per sentence (combine shorter ones)")
     
@@ -696,4 +696,16 @@ def main():
     except Exception:
         pass
 
-    print(f
+    print(f"✅ Wrote {len(rows_to_append)} sentence segments for run {run_id}")
+
+    # --- THIS IS THE FIX ---
+    try:
+        with open("generated/run_id.txt", "w", encoding="utf-8") as f:
+            f.write(run_id)
+        print(f"✅ Saved run_id to generated/run_id.txt")
+    except Exception as e:
+        print(f"⚠️  Could not save run_id.txt: {e}")
+    # -------------------------------------------------
+
+if __name__ == "__main__":
+    main()
