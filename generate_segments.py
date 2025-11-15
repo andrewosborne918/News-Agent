@@ -3,8 +3,7 @@
 generate_segments.py
 
 Features:
-- (--auto) Pick the most popular/recency-weighted article via news_picker.pick_top_story()
-  (NewsData.io under the hood). Defaults to politics.
+- (--auto) Pick the most popular/recency-weighted article *only from TARGET_SOURCES*
 - Otherwise use --story_url / --story_title
 - Fetch article text with fallbacks (normal -> Reuters AMP -> reader mirror)
 - (Optional) --article_text to bypass fetching
@@ -21,7 +20,7 @@ Google Sheet tabs expected:
 import os
 import sys
 import re
-import time # This was already here, which is good.
+import time
 import argparse
 import datetime as dt
 import json
@@ -36,6 +35,98 @@ import gspread
 import google.generativeai as genai
 from gspread.exceptions import APIError
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
+
+# --- NEW: Define the list of approved news sources ---
+TARGET_SOURCES = [
+    "foxnews.com",
+    "breitbart.com",
+    "newsmax.com",
+    "dailywire.com",
+    "dailysignal.com",
+    "thehill.com",
+    "nationalreview.com",
+    "theamericanconservative.com",
+    "wsj.com",
+    "aei.org",                 # American Enterprise Institute
+    "firstthings.com",
+    "modernagejournal.com"
+]
+# ----------------------------------------------------
+
+# --- NEW: Function to pick stories only from target sources ---
+def pick_top_story_from_sources(country: str, category: str, query: str = None) -> Tuple[str, str, dt.datetime, float]:
+    """
+    Picks a top story *only* from the predefined TARGET_SOURCES list
+    using the NewsData.io API.
+    
+    Returns:
+        (url, title, published_at, score) or None
+    """
+    api_key = os.getenv("NEWSDATA_API_KEY")
+    if not api_key:
+        print("❌ ERROR: NEWSDATA_API_KEY environment variable not set.")
+        return None
+
+    base_url = "https://newsdata.io/api/1/news"
+    
+    # Join the domains into a comma-separated string for the API
+    domains = ",".join(TARGET_SOURCES)
+    
+    params = {
+        "apikey": api_key,
+        "country": country,
+        "category": category,
+        "language": "en",
+        "domain": domains,          # <-- This is the most important part
+        "prioritydomain": domains   # <-- Tells API to prefer these sources
+    }
+    if query:
+        params["q"] = query
+        
+    print(f"ℹ️  Searching for top story from: {domains}...")
+        
+    try:
+        response = requests.get(base_url, params=params, timeout=15)
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        data = response.json()
+        
+        if data.get("status") == "success" and data.get("totalResults", 0) > 0:
+            # Take the first (most recent/relevant) article
+            article = data["results"][0]
+            
+            url = article.get("link")
+            title = article.get("title")
+            
+            # Parse publish date
+            pub_date_str = article.get("pubDate", "")
+            published_at = dt.datetime.utcnow() # Fallback
+            try:
+                # NewsData.io format is 'YYYY-MM-DD HH:MM:SS'
+                published_at = dt.datetime.strptime(pub_date_str, '%Y-%m-%d %H:%M:%S')
+            except (ValueError, TypeError):
+                pass # Use fallback
+
+            # NewsData.io doesn't provide a 'score'. We'll use 1.0
+            score = 1.0 
+            
+            if not url or not title:
+                print("❌ API returned article with missing URL or Title.")
+                return None
+                
+            return (url, title, published_at, score)
+            
+        else:
+            print(f"⚠️  No articles found from target sources. (API status: {data.get('status')})")
+            return None
+            
+    except requests.exceptions.RequestException as e:
+        print(f"❌ API call to NewsData.io failed: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Error parsing NewsData.io response: {e}")
+        return None
+# -------------------------------------------------------------
+
 
 # --- THIS IS THE CORRECTED, SINGLE FUNCTION ---
 def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
@@ -80,12 +171,6 @@ def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
         except Exception as fallback_e:
             print(f"❌ Fallback model {fallback_model_name} also failed.")
             raise fallback_e # Re-raise the fallback error
-
-# Auto-pick support (NewsData.io). Ensure news_picker.py is in the same folder.
-try:
-    import news_picker  # provides pick_top_story(country, category, query)
-except Exception:
-    news_picker = None  # we'll guard in --auto path
 
 # Pexels stock photos
 try:
@@ -499,20 +584,22 @@ def main():
     args = ap.parse_args()
     sheet_key, _, _ = load_env_or_die()
 
-    # Auto-pick article (NewsData.io via news_picker)
+    # --- UPDATED: Auto-pick article (NewsData.io via *new local function*) ---
     title = args.story_title
     url = args.story_url
     if args.auto:
-        if news_picker is None:
-            sys.exit("news_picker.py not found. Add it next to this script or disable --auto.")
-        picked = news_picker.pick_top_story(
+        # Use our new function that *only* queries the target sources
+        picked = pick_top_story_from_sources(
             country=args.country, category=args.topic, query=(args.query or None)
         )
+        
         if not picked:
-            sys.exit("Could not pick a top story. Check NEWSDATA_API_KEY or adjust --country/--topic/--query.")
+            sys.exit("❌ Could not pick a top story from the defined sources. Check NEWSDATA_API_KEY or API logs.")
+        
         url, title, published_at, score = picked
         print(f"[auto] Picked: {title} ({url}) score={score:.3f} published={published_at.isoformat()}Z")
-        save_article_data(url, title) # This was already in your new file, which is great
+        save_article_data(url, title)
+    # ---------------------------------------------------------------------
 
     if not url:
         sys.exit("No story URL provided. Use --auto or pass --story_url.")
