@@ -36,24 +36,17 @@ import google.generativeai as genai
 from gspread.exceptions import APIError
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 
-# --- List of approved news sources ---
+# --- THIS IS THE UPDATED LIST ---
 TARGET_SOURCES = [
     "foxnews.com",
-    "breitbart.com",
-    "newsmax.com",
-    "dailywire.com",
-    "dailysignal.com",
-    "thehill.com",
-    "nationalreview.com",
-    "theamericanconservative.com",
-    "wsj.com",
-    "aei.org",                 # American Enterprise Institute
-    "firstthings.com",
-    "modernagejournal.com"
+    "nypost.com",
+    "dailymail.co.uk",
+    "washingtonexaminer.com",
+    "breitbart.com"
 ]
-# ----------------------------------------------------
+# -----------------------------------------------------------
 
-# --- THIS IS THE CORRECTED, UPDATED FUNCTION ---
+# --- THIS FUNCTION IS NOW CORRECT ---
 def pick_top_story_from_sources(country: str, category: str, query: str = None) -> Tuple[str, str, dt.datetime, float]:
     """
     Picks a top story *only* from the predefined TARGET_SOURCES list
@@ -92,7 +85,7 @@ def pick_top_story_from_sources(country: str, category: str, query: str = None) 
             "country": country,
             "category": category,
             "language": "en",
-            "domainurl": domains,  # <-- THIS IS THE FIX (was 'domain')
+            "domainurl": domains,  # <-- Use the correct 'domainurl' parameter
         }
         if query:
             params["q"] = query
@@ -596,7 +589,7 @@ def main():
 
     # Output / model settings
     ap.add_argument("--duration", type=float, default=4.0, help="Seconds each sentence is shown")
-    ap.add_argument("--image-path-prefix", default="", help="Prefix to pre-fill image_path")
+    ap.adda_argument("--image-path-prefix", default="", help="Prefix to pre-fill image_path")
     ap.add_argument("--max-words", type=int, default=15, help="Max words per sentence")
     ap.add_argument("--min-words", type=int, default=10, help="Min words per sentence (combine shorter ones)")
     
