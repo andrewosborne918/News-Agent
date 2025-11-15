@@ -36,13 +36,22 @@ import google.generativeai as genai
 from gspread.exceptions import APIError
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 
-# --- THIS IS THE UPDATED LIST ---
+# --- THIS IS YOUR NEW LIST OF 14 SOURCES ---
 TARGET_SOURCES = [
     "foxnews.com",
-    "nypost.com",
-    "dailymail.co.uk",
+    "washingtontimes.com",
+    "dailywire.com",
+    "breitbart.com",
+    "theblaze.com",
+    "newsmax.com",
+    "thefederalist.com",
+    "nationalreview.com",
+    "theepochtimes.com",
+    "townhall.com",
     "washingtonexaminer.com",
-    "breitbart.com"
+    "redstate.com",
+    "pjmedia.com",
+    "americanthinker.com"
 ]
 # -----------------------------------------------------------
 
@@ -593,9 +602,7 @@ def main():
     ap.add_argument("--max-words", type=int, default=15, help="Max words per sentence")
     ap.add_argument("--min-words", type=int, default=10, help="Min words per sentence (combine shorter ones)")
     
-    # --- THIS IS THE FIX ---
-    ap.add_argument("--model", default="gemini-2.0-flash-lite", help="Gemini model") # <-- FIXED DEFAULT
-    # -----------------------
+    ap.add_argument("--model", default="gemini-2.0-flash-lite", help="Gemini model")
 
     args = ap.parse_args()
     sheet_key, _, _ = load_env_or_die()
@@ -689,16 +696,4 @@ def main():
     except Exception:
         pass
 
-    print(f"✅ Wrote {len(rows_to_append)} sentence segments for run {run_id}")
-
-    # --- ADDED: SAVE THE RUN_ID FOR OTHER SCRIPTS ---
-    try:
-        with open("generated/run_id.txt", "w", encoding="utf-8") as f:
-            f.write(run_id)
-        print(f"✅ Saved run_id to generated/run_id.txt")
-    except Exception as e:
-        print(f"⚠️  Could not save run_id.txt: {e}")
-    # -------------------------------------------------
-
-if __name__ == "__main__":
-    main()
+    print(f
