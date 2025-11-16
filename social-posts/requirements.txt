@@ -1,0 +1,7 @@
+# Dependencies for the image processor
+google-api-python-client
+google-auth-oauthlib
+google-cloud-secretmanager
+google-generativeai
+requests
+Pillow

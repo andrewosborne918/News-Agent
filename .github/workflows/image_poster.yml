@@ -1,0 +1,57 @@
+name: Image Poster (from Google Drive)
+
+on:
+  schedule:
+    # Runs once per day at 8am EST (13:00 UTC)
+    - cron: "0 13 * * *"
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Required for google-github-actions/auth
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Installs the requirements specific to this workflow
+          pip install -r social-posts/requirements.txt
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Run Image Processor
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          
+          # GCP Project ID is needed for Secret Manager
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          
+          # Secrets for Facebook (pulled from Secret Manager by the script)
+          FB_PAGE_ID_SECRET: FB_PAGE_ID # Name of the secret in Secret Manager
+          FB_PAGE_TOKEN_SECRET: FACEBOOK_PAGE_TOKEN # Name of the secret in Secret Manager
+          
+          # Google Drive Folder IDs
+          SOURCE_DRIVE_FOLDER_ID: "1Y5Ve_-TIch4YffTcrzsftMG-j6P2Fsgh"
+          USED_DRIVE_FOLDER_ID: "1ghvqJI0aIm_KFSkwphlabpyhcGvf-I3Q"
+          
+          # ---
+          # UPDATED to match your other workflows
+          # ---
+          MODEL_NAME: "gemini-2.5-flash" 
+        run: |
+          # Runs the script from its new location
+          python social-posts/image_processor.py

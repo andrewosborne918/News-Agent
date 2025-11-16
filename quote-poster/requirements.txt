@@ -1,6 +1,0 @@
-functions-framework
-google-cloud-secret-manager
-google-cloud-aiplatform
-google-auth-httplib2
-requests
-Pillow
