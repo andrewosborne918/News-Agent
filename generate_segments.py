@@ -41,6 +41,7 @@ TARGET_SOURCES = [
     "foxnews.com",
     "washingtontimes.com",
     "breitbart.com",
+    "theblaze.com",
 ]
 # -----------------------------------------------------------
 
