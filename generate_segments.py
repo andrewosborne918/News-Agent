@@ -40,6 +40,7 @@ from google.api_core.exceptions import ResourceExhausted, InternalServerError
 TARGET_SOURCES = [
     "foxnews.com",
     "washingtontimes.com",
+    "breitbart.com",
 ]
 # -----------------------------------------------------------
 
