@@ -41,8 +41,7 @@ TARGET_SOURCES = [
     "foxnews.com",
     "washingtontimes.com",
     "breitbart.com",
-    "dailycaller.com",
-    "newsmax.com",]
+    "dailycaller.com",]
 # -----------------------------------------------------------
 
 # --- THIS FUNCTION IS NOW CORRECT ---
