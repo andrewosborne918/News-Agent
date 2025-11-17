@@ -11,9 +11,9 @@ import os
 import requests
 from datetime import datetime, timezone
 from dateutil import parser as dateparser
-from urllib.parse import urlparse # <-- ADDED THIS IMPORT
+from urllib.parse import urlparse
 
-# ADD YOUR LIST OF APPROVED SOURCES HERE
+# YOUR LIST OF APPROVED SOURCES
 TARGET_SOURCES = [
     "foxnews.com",
     "washingtontimes.com",
@@ -32,13 +32,18 @@ def pick_top_story(country="us", category="politics", query=None):
 
     base_url = "https://newsdata.io/api/1/news"
 
+    # --- THIS IS THE FIX ---
+    # We now tell the API to ONLY search these domains,
+    # making country/category redundant.
+    domain_list = ",".join(TARGET_SOURCES)
+
     params = {
         "apikey": api_key,
-        "country": country,
+        "domain": domain_list,
         "language": "en",
-        "category": category,
         "q": query or "",
     }
+    # -----------------------
 
     # remove None values
     params = {k: v for k, v in params.items() if v}
@@ -52,13 +57,13 @@ def pick_top_story(country="us", category="politics", query=None):
         return None
 
     if "results" not in data or not data["results"]:
-        print(f"⚠️ No results from NewsData.io. Response: {data.get('status')}, message: {data.get('message', 'N/A')}")
+        print(f"⚠️ No results from NewsData.io for domains {domain_list}. Response: {data.get('status')}, message: {data.get('message', 'N/A')}")
         return None
 
     articles = data["results"]
-    print(f"📰 Found {len(articles)} articles from NewsData.io")
+    print(f"📰 Found {len(articles)} articles from NewsData.io (from target sources)")
 
-    # --- START: NEW FILTERING LOGIC ---
+    # --- Double-check filter (good practice) ---
     filtered_articles = []
     for a in articles:
         link = a.get("link") or ""
@@ -77,11 +82,12 @@ def pick_top_story(country="us", category="politics", query=None):
             continue # Skip malformed URLs
     
     if not filtered_articles:
-        print(f"⚠️ No articles found matching target sources: {TARGET_SOURCES}")
+        print(f"⚠️ API returned articles, but none passed secondary domain validation for: {TARGET_SOURCES}")
         return None
     
-    print(f"✅ Filtered to {len(filtered_articles)} articles from approved sources.")
-    # --- END: NEW FILTERING LOGIC ---
+    # We no longer print this as it's redundant
+    # print(f"✅ Filtered to {len(filtered_articles)} articles from approved sources.")
+    # -------------------------------------------
 
 
     # High-interest political keywords (boost these stories)
@@ -110,7 +116,6 @@ def pick_top_story(country="us", category="politics", query=None):
     best_score = -1.0
     now = datetime.now(timezone.utc)
     
-    # --- UPDATED THIS LINE ---
     for a in filtered_articles:
         title = a.get("title") or ""
         description = a.get("description") or ""
@@ -159,13 +164,11 @@ def pick_top_story(country="us", category="politics", query=None):
     # Fallback: if no story scored positively, pick the least boring one
     print("⚠️ No story with positive score, picking least boring article as fallback")
     
-    # --- UPDATED THIS LINE ---
     if filtered_articles:
         # Find article with fewest boring keywords
         least_boring = None
         min_boring_count = 999
         
-        # --- UPDATED THIS LINE ---
         for fallback in filtered_articles:
             title = fallback.get("title") or ""
             description = fallback.get("description") or ""
