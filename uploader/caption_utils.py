@@ -126,7 +126,7 @@ def _get_answers_from_sheet(run_id_key: str) -> Optional[str]:
             if row_index < len(all_data_col_values):
                 answer_text = all_data_col_values[row_index]
                 if answer_text and isinstance(answer_text, str):
-                    answer_texts.append(answer_text..strip())
+                    answer_texts.append(answer_text.strip())
             else:
                 logger.warning(f"[sheets] Found cell at row {cell.row} but data column {SHEET_DATA_COLUMN} was short.")
 
