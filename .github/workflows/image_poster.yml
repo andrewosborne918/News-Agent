@@ -2,8 +2,8 @@ name: Image Poster (from Google Drive)
 
 on:
   schedule:
-    # Runs once per day at 8am EST (13:00 UTC)
-    - cron: "0 13 * * *"
+    # Runs daily at 8am, 11am, and 3pm EST (13, 16, & 20 UTC)
+    - cron: "0 13,16,20 * * *"
   workflow_dispatch: # Allows manual triggering
 
 jobs:
