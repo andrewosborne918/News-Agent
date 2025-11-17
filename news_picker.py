@@ -33,15 +33,18 @@ def pick_top_story(country="us", category="politics", query=None):
     base_url = "https://newsdata.io/api/1/news"
 
     # --- THIS IS THE FIX ---
-    # We now tell the API to ONLY search these domains,
-    # making country/category redundant.
+    # We tell the API to ONLY search these domains.
     domain_list = ",".join(TARGET_SOURCES)
+    
+    # We MUST provide a query ('q') when using 'domain'.
+    # We will use the 'query' if provided, otherwise default to the 'category'.
+    search_query = query or category
 
     params = {
         "apikey": api_key,
         "domain": domain_list,
         "language": "en",
-        "q": query or "",
+        "q": search_query, # Use "politics" or the user's query
     }
     # -----------------------
 
@@ -57,7 +60,7 @@ def pick_top_story(country="us", category="politics", query=None):
         return None
 
     if "results" not in data or not data["results"]:
-        print(f"⚠️ No results from NewsData.io for domains {domain_list}. Response: {data.get('status')}, message: {data.get('message', 'N/A')}")
+        print(f"⚠️ No results from NewsData.io for domains {domain_list} with query '{search_query}'. Response: {data.get('status')}, message: {data.get('message', 'N/A')}")
         return None
 
     articles = data["results"]
@@ -84,9 +87,6 @@ def pick_top_story(country="us", category="politics", query=None):
     if not filtered_articles:
         print(f"⚠️ API returned articles, but none passed secondary domain validation for: {TARGET_SOURCES}")
         return None
-    
-    # We no longer print this as it's redundant
-    # print(f"✅ Filtered to {len(filtered_articles)} articles from approved sources.")
     # -------------------------------------------
 
 
