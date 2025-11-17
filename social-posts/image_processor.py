@@ -12,7 +12,7 @@ Workflow:
 """
 
 import os
-import sys
+import sys  # <-- ADDED
 import json
 import time
 import io
@@ -22,7 +22,7 @@ from typing import Dict, Optional, Tuple
 import google.generativeai as genai
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 from google.cloud import storage # <-- ADDED
-from google.auth import default as google_auth_default
+from google.oauth2 import service_account  # <-- ADDED
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from googleapiclient.errors import HttpError
@@ -86,14 +86,32 @@ def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
             print(f"❌ Fallback model {fallback_model_name} also failed.")
             raise fallback_e # Re-raise the fallback error
 
+# ---
+# --- REPLACED FUNCTION ---
+# ---
 def get_gdrive_service():
-    """Authenticates using default creds and returns a Google Drive v3 service object."""
-    print("🔐 Authenticating to Google Drive using default credentials...")
-    SCOPES = ['https.www.googleapis.com/auth/drive']
-    creds, _ = google_auth_default(scopes=SCOPES)
-    service = build('drive', 'v3', credentials=creds)
-    print("✅ Google Drive service authenticated.")
-    return service
+    """Authenticates using the JSON key path and returns a Google Drive v3 service object."""
+    print("🔐 Authenticating to Google Drive using Service Account JSON...")
+    SCOPES = ['https://www.googleapis.com/auth/drive']
+    JSON_PATH = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_PATH")
+    
+    if not JSON_PATH:
+        print("❌ Error: GOOGLE_SERVICE_ACCOUNT_JSON_PATH environment variable not set.")
+        sys.exit(1)
+        
+    if not os.path.exists(JSON_PATH):
+        print(f"❌ Error: Service account file not found at: {JSON_PATH}")
+        sys.exit(1)
+
+    try:
+        creds = service_account.Credentials.from_service_account_file(
+            JSON_PATH, scopes=SCOPES)
+        service = build('drive', 'v3', credentials=creds)
+        print("✅ Google Drive service authenticated.")
+        return service
+    except Exception as e:
+        print(f"❌ Failed to authenticate with service account JSON: {e}")
+        sys.exit(1)
 
 def get_first_image_from_drive(service) -> Optional[Dict[str, str]]:
     """Fetches the first file from the source folder."""
@@ -196,7 +214,7 @@ def upload_to_gcs(local_file_path: str, blob_name: str):
         blob = bucket.blob(f"incoming/{blob_name}") # Upload to the 'incoming' folder
         
         blob.upload_from_filename(local_file_path)
-        print(f"✅ GCS Upload successful: gs://{GCS_BUCKET}/incoming/{blob_name}")
+        print(f"✅ GCS Upload successful: gs://{GGCS_BUCKET}/incoming/{blob_name}")
     except Exception as e:
         print(f"❌ GCS Upload failed: {e}")
         raise # Re-raise the exception to fail the workflow
