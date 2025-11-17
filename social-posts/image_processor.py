@@ -12,7 +12,7 @@ Workflow:
 """
 
 import os
-import sys  # <-- ADDED
+import sys
 import json
 import time
 import io
@@ -21,8 +21,8 @@ from typing import Dict, Optional, Tuple
 # --- Google / Gemini ---
 import google.generativeai as genai
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
-from google.cloud import storage # <-- ADDED
-from google.oauth2 import service_account  # <-- ADDED
+from google.cloud import storage 
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from googleapiclient.errors import HttpError
@@ -34,9 +34,12 @@ from PIL import Image
 SOURCE_FOLDER_ID = os.environ.get("SOURCE_DRIVE_FOLDER_ID")
 USED_FOLDER_ID = os.environ.get("USED_DRIVE_FOLDER_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GCS_BUCKET = os.environ.get("GCS_BUCKET") # <-- ADDED
+GCS_BUCKET = os.environ.get("GCS_BUCKET") 
 MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-2.5-flash")
-FALLBACK_MODEL_NAME = "gemini-2.5-pro"
+
+# --- MODIFIED LINE ---
+FALLBACK_MODEL_NAME = "gemini-2.0-flash" 
+# ---
 
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 
@@ -63,8 +66,14 @@ def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
             model = genai.GenerativeModel(primary_model_name)
             return model.generate_content(prompt) # Retry the primary model
         except Exception as retry_e:
-            print(f"❌ Retry with {primary_model_name} also failed.")
-            raise retry_e # Re-raise the error after retry
+            # If retry also fails, try the fallback
+            print(f"❌ Retry with {primary_model_name} also failed. Trying fallback {fallback_model_name}. Error: {retry_e}")
+            try:
+                model = genai.GenerativeModel(fallback_model_name)
+                return model.generate_content(prompt)
+            except Exception as fallback_e:
+                print(f"❌ Fallback model {fallback_model_name} also failed.")
+                raise fallback_e # Re-raise the fallback error
     
     except (InternalServerError) as e:
         # 3. If it's a server error (500s), try the fallback
@@ -87,12 +96,12 @@ def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
             raise fallback_e # Re-raise the fallback error
 
 # ---
-# --- REPLACED FUNCTION ---
+# --- This is the updated auth function ---
 # ---
 def get_gdrive_service():
     """Authenticates using the JSON key path and returns a Google Drive v3 service object."""
     print("🔐 Authenticating to Google Drive using Service Account JSON...")
-    SCOPES = ['https://www.googleapis.com/auth/drive']
+    SCOPES = ['https.www.googleapis.com/auth/drive']
     JSON_PATH = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_PATH")
     
     if not JSON_PATH:
@@ -214,7 +223,7 @@ def upload_to_gcs(local_file_path: str, blob_name: str):
         blob = bucket.blob(f"incoming/{blob_name}") # Upload to the 'incoming' folder
         
         blob.upload_from_filename(local_file_path)
-        print(f"✅ GCS Upload successful: gs://{GGCS_BUCKET}/incoming/{blob_name}")
+        print(f"✅ GCS Upload successful: gs://{GCS_BUCKET}/incoming/{blob_name}")
     except Exception as e:
         print(f"❌ GCS Upload failed: {e}")
         raise # Re-raise the exception to fail the workflow
