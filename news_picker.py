@@ -11,6 +11,15 @@ import os
 import requests
 from datetime import datetime, timezone
 from dateutil import parser as dateparser
+from urllib.parse import urlparse # <-- ADDED THIS IMPORT
+
+# ADD YOUR LIST OF APPROVED SOURCES HERE
+TARGET_SOURCES = [
+    "foxnews.com",
+    "washingtontimes.com",
+    "breitbart.com",
+    "dailycaller.com"
+]
 
 def pick_top_story(country="us", category="politics", query=None):
     """
@@ -49,6 +58,32 @@ def pick_top_story(country="us", category="politics", query=None):
     articles = data["results"]
     print(f"📰 Found {len(articles)} articles from NewsData.io")
 
+    # --- START: NEW FILTERING LOGIC ---
+    filtered_articles = []
+    for a in articles:
+        link = a.get("link") or ""
+        if not link:
+            continue
+        
+        try:
+            # Get the domain (e.g., "www.foxnews.com" -> "foxnews.com")
+            domain = urlparse(link).netloc
+            if domain.startswith("www."):
+                domain = domain[4:]
+            
+            if domain in TARGET_SOURCES:
+                filtered_articles.append(a)
+        except Exception:
+            continue # Skip malformed URLs
+    
+    if not filtered_articles:
+        print(f"⚠️ No articles found matching target sources: {TARGET_SOURCES}")
+        return None
+    
+    print(f"✅ Filtered to {len(filtered_articles)} articles from approved sources.")
+    # --- END: NEW FILTERING LOGIC ---
+
+
     # High-interest political keywords (boost these stories)
     high_interest_keywords = [
         "trump", "biden", "harris", "mamdani", "obama", "clinton",
@@ -75,7 +110,8 @@ def pick_top_story(country="us", category="politics", query=None):
     best_score = -1.0
     now = datetime.now(timezone.utc)
     
-    for a in articles:
+    # --- UPDATED THIS LINE ---
+    for a in filtered_articles:
         title = a.get("title") or ""
         description = a.get("description") or ""
         link = a.get("link") or ""
@@ -122,12 +158,15 @@ def pick_top_story(country="us", category="politics", query=None):
     
     # Fallback: if no story scored positively, pick the least boring one
     print("⚠️ No story with positive score, picking least boring article as fallback")
-    if articles:
+    
+    # --- UPDATED THIS LINE ---
+    if filtered_articles:
         # Find article with fewest boring keywords
         least_boring = None
         min_boring_count = 999
         
-        for fallback in articles:
+        # --- UPDATED THIS LINE ---
+        for fallback in filtered_articles:
             title = fallback.get("title") or ""
             description = fallback.get("description") or ""
             combined_text = f"{title.lower()} {description.lower()}"
