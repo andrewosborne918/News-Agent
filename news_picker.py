@@ -30,9 +30,11 @@ def pick_top_story(country="us", category="politics", query=None):
     if not api_key:
         raise RuntimeError("NEWSDATA_API_KEY missing in .env")
 
-    base_url = "https://newsdata.io/api/1/news"
-
     # --- THIS IS THE FIX ---
+    # The endpoint for 'latest' news is /api/1/latest
+    base_url = "https://newsdata.io/api/1/latest"
+    # -----------------------
+
     # We tell the API to ONLY search these domains.
     domain_list = ",".join(TARGET_SOURCES)
     
@@ -46,7 +48,6 @@ def pick_top_story(country="us", category="politics", query=None):
         "language": "en",
         "q": search_query, # Use "politics" or the user's query
     }
-    # -----------------------
 
     # remove None values
     params = {k: v for k, v in params.items() if v}
