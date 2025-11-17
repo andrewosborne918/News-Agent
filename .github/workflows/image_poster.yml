@@ -28,16 +28,13 @@ jobs:
           # Installs the requirements specific to this workflow
           pip install -r social-posts/requirements.txt
 
-      # --- ADDED: This step restores the key file ---
-      - name: Restore Google service account JSON
-        run: |
-          mkdir -p credentials
-          echo "${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_B64 }}" | base64 --decode > credentials/service_account.json
+      # --- REMOVED "Restore Google service account JSON" STEP ---
 
+      # --- This step is still good for GCS/Cloud Function auth ---
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }} # Assumes you still need this for GCS
 
       - name: Setup Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -56,9 +53,12 @@ jobs:
           
           # Model name
           MODEL_NAME: "gemini-2.5-flash"
+          FALLBACK_MODEL_NAME: "gemini-2.0-flash"
           
-          # --- ADDED: This points the script to the key file ---
-          GOOGLE_SERVICE_ACCOUNT_JSON_PATH: credentials/service_account.json
+          # --- ADDED NEW OAUTH SECRETS ---
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
         run: |
           # Runs the script from its new location
           python social-posts/image_processor.py
