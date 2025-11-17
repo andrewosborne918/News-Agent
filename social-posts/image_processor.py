@@ -29,7 +29,7 @@ USED_FOLDER_ID = os.environ.get("USED_DRIVE_FOLDER_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GCS_BUCKET = os.environ.get("GCS_BUCKET") 
 MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-2.5-flash")
-FALLBACK_MODEL_NAME = os.environ.get("FALLBACK_MODEL_NAME", "gemini-2.0-flash") # <-- KEPT YOUR FALLBACK
+FALLBACK_MODEL_NAME = os.environ.get("FALLBACK_MODEL_NAME", "gemini-2.0-flash")
 
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 
@@ -91,7 +91,7 @@ def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
             raise fallback_e # Re-raise the fallback error
 
 # ---
-# --- COMPLETELY REPLACED FUNCTION ---
+# --- This is the working OAuth function ---
 # ---
 def get_gdrive_service():
     """Authenticates using user OAuth 2.0 credentials."""
@@ -185,14 +185,19 @@ def generate_post_from_image(image_path: str) -> Optional[str]:
         genai.configure(api_key=GEMINI_API_KEY)
         img = Image.open(image_path)
         
-        prompt_text = """You are a news analyst for 'RightSide Report,' a conservative news outlet. Your analysis is guided by fiscal responsibility, limited government, and individual liberty.
+        # --- MODIFIED ---
+        prompt_text = """You are a conservative commentator for 'RightSide Report.'
+Your tone is conversational, casual, and witty, similar to Michael Knowles. You break down complex topics with a clear, conservative viewpoint and a touch of dry humor.
+
 Based on the attached image, write a 3 to 4 paragraph post about the topic it represents.
+
 RULES:
 1.  **Find the Conservative Angle:** Analyze the image and identify the core topic. Frame this topic from a conservative perspective.
 2.  **Focus on Core Principles:** Connect the topic to its impact on the economy, taxes, government overreach, border security, or individual freedoms.
-3.  **Tone:** Your tone must be direct, analytical, and confident.
-4.  **Format:** Write 3-4 full paragraphs. Do not use hashtags or any other formatting. Just the paragraphs.
+3.  **Tone:** Be conversational and casual. Be articulate and witty, like a podcast host chatting with your audience. Don't be stiff or overly formal. A bit of dry humor is welcome.
+4.  **Format:** Write 3-4 full paragraphs. Don't reference the image itself. Just discuss the ideaDo not use hashtags or any other formatting. Just the paragraphs.
 """
+        # --- END MODIFICATION ---
 
         response = generate_with_fallback(
             [prompt_text, img],
@@ -200,7 +205,7 @@ RULES:
             fallback_model_name=FALLBACK_MODEL_NAME
         )
         
-        post_text = response.text.strip()
+        post_text = response.text..strip()
         
         if not post_text or len(post_text.split()) < 50:
             print("❌ Gemini returned an empty or very short response.")
