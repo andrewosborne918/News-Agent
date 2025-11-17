@@ -1,8 +1,9 @@
 # Dependencies for the image processor
-google-api-python-client
-google-auth-oauthlib
-google-cloud-secret-manager
-google-cloud-storage  # <-- ADDED
-google-generativeai
-requests
-Pillow
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.1.0
+google-cloud-secret-manager>=2.20.0
+google-cloud-storage>=2.20.0
+google-generativeai>=0.8.1
+requests>=2.31.0
+Pillow>=10.0.0
+google-auth>=2.23.0
