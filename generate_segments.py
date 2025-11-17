@@ -3,7 +3,8 @@
 generate_segments.py
 
 Features:
-- (--auto) Pick the most popular/recency-weighted article *only from TARGET_SOURCES*
+- (--auto) Pick the most popular/recency-weighted article via news_picker.pick_top_story()
+  (NewsData.io under the hood). Defaults to politics.
 - Otherwise use --story_url / --story_title
 - Fetch article text with fallbacks (normal -> Reuters AMP -> reader mirror)
 - (Optional) --article_text to bypass fetching
@@ -20,7 +21,7 @@ Google Sheet tabs expected:
 import os
 import sys
 import re
-import time
+import time # This was already here, which is good.
 import argparse
 import datetime as dt
 import json
@@ -36,155 +37,70 @@ import google.generativeai as genai
 from gspread.exceptions import APIError
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 
-# --- THIS IS YOUR NEW LIST OF 14 SOURCES ---
-TARGET_SOURCES = [
-    "foxnews.com",
-    "washingtontimes.com",
-    "breitbart.com",
-    "dailycaller.com",]
-# -----------------------------------------------------------
 
-# --- THIS FUNCTION IS NOW CORRECT ---
-def pick_top_story_from_sources(country: str, category: str, query: str = None) -> Tuple[str, str, dt.datetime, float]:
+# The new fallback function to use in all 3 files
+# (Remember to add "import time" at the top of each file!)
+def generate_with_model_fallback(prompt: str, model_list: list[str]):
     """
-    Picks a top story *only* from the predefined TARGET_SOURCES list
-    using the NewsData.io API.
-    
-    Handles API limit of 5 domains per request by chunking the list.
-    
-    Returns:
-        (url, title, published_at, score) or None
+    Tries to generate content with a list of models, falling back on quota errors.
     """
-    api_key = os.getenv("NEWSDATA_API_KEY")
-    if not api_key:
-        print("❌ ERROR: NEWSDATA_API_KEY environment variable not set.")
-        return None
-
-    base_url = "https://newsdata.io/api/1/news"
+    if not model_list:
+        raise ValueError("Model list cannot be empty.")
     
-    # NewsData.io has a limit of 5 domains per request on free/basic plans
-    DOMAIN_CHUNK_SIZE = 5
+    last_error = None
     
-    # Split the target sources into chunks of 5
-    domain_chunks = [
-        TARGET_SOURCES[i:i + DOMAIN_CHUNK_SIZE]
-        for i in range(0, len(TARGET_SOURCES), DOMAIN_CHUNK_SIZE)
-    ]
-    
-    all_top_articles = []
-    
-    print(f"ℹ️  Searching for top story... Will make {len(domain_chunks)} API request(s).")
-
-    for i, chunk in enumerate(domain_chunks):
-        domains = ",".join(chunk)
+    for i, model_name in enumerate(model_list):
+        is_last_model = (i == len(model_list) - 1)
         
-        params = {
-            "apikey": api_key,
-            "country": country,
-            "category": category,
-            "language": "en",
-            "domainurl": domains,  # <-- Use the correct 'domainurl' parameter
-        }
-        if query:
-            params["q"] = query
-            
-        print(f"  -> Request {i+1}/{len(domain_chunks)} (Sources: {domains})")
-            
         try:
-            response = requests.get(base_url, params=params, timeout=15)
-            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-            data = response.json()
-            
-            if data.get("status") == "success" and data.get("totalResults", 0) > 0:
-                # Get the top article from this chunk's results
-                article = data["results"][0]
-                pub_date_str = article.get("pubDate", "")
+            print(f"ℹ️  Attempting generation with: {model_name}")
+            model = genai.GenerativeModel(model_name)
+            return model.generate_content(prompt)
+        
+        except ResourceExhausted as e:
+            # 429 Quota Error. Try the next model.
+            print(f"⚠️  Quota limit on {model_name}. Trying next model...")
+            last_error = e
+            if is_last_model:
+                print(f"❌ All fallback models are also rate-limited. Raising error.")
+                raise e
+            continue # Try next model
+        
+        except (InternalServerError) as e:
+            # 500 Server Error. Pause, retry *this* model once.
+            print(f"⚠️  Server error on {model_name}. Pausing for 10s and retrying...")
+            last_error = e
+            time.sleep(10)
+            try:
+                model = genai.GenerativeModel(model_name)
+                return model.generate_content(prompt)
+            except Exception as retry_e:
+                print(f"❌ Retry failed for {model_name}. Trying next model...")
+                last_error = retry_e
+                if is_last_model:
+                    raise retry_e
+                continue # Try next model
                 
-                # Parse publish date
-                published_at = dt.datetime.min # Fallback for sorting
-                try:
-                    # NewsData.io format is 'YYYY-MM-DD HH:MM:SS'
-                    published_at = dt.datetime.strptime(pub_date_str, '%Y-%m-%d %H:%M:%S')
-                except (ValueError, TypeError):
-                    pass 
-                
-                all_top_articles.append((published_at, article))
-                
-            else:
-                print(f"  -> No articles found for this chunk.")
-                
-        except requests.exceptions.RequestException as e:
-            # Log the error but continue to the next chunk
-            print(f"❌ API call for chunk {i+1} failed: {e}")
         except Exception as e:
-            print(f"❌ Error parsing response for chunk {i+1}: {e}")
+            # Other error (Safety, etc.). Try the next model immediately.
+            print(f"❌ Non-quota error on {model_name}: {e}. Trying next model...")
+            last_error = e
+            if is_last_model:
+                print(f"❌ All fallback models also failed. Raising error.")
+                raise e
+            continue # Try next model
+    
+    # This should not be reachable, but as a safeguard
+    if last_error:
+        raise last_error
+    else:
+        raise Exception("Failed to generate content after trying all models.")
 
-    # --- After checking all chunks, find the newest article ---
-    if not all_top_articles:
-        print("⚠️  No articles found from any of the target sources.")
-        return None
-        
-    # Sort the list of articles by their datetime (newest first)
-    all_top_articles.sort(key=lambda x: x[0], reverse=True)
-    
-    # Get the data from the newest article
-    newest_article_datetime, newest_article_data = all_top_articles[0]
-    
-    url = newest_article_data.get("link")
-    title = newest_article_data.get("title")
-    score = 1.0 # We'll use 1.0 since we're just picking the newest
-    
-    if not url or not title:
-        print("❌ API returned article with missing URL or Title.")
-        return None
-        
-    return (url, title, newest_article_datetime, score)
-# -------------------------------------------------------------
-
-
-# --- THIS IS THE CORRECTED, SINGLE FUNCTION ---
-def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
-    """
-    Tries to generate content with the primary model.
-    - If a rate limit error (429) occurs, it pauses for 61 seconds and retries.
-    - If another error (like 500) occurs, it tries the fallback model.
-    """
-    try:
-        # 1. Try the primary model
-        model = genai.GenerativeModel(primary_model_name)
-        return model.generate_content(prompt)
-    
-    except ResourceExhausted as e:
-        # 2. If rate limited (429), PAUSE and RETRY
-        print(f"⚠️  Rate limit on {primary_model_name}. Pausing for 61 seconds... Error: {e}")
-        time.sleep(61) # Pause for 61 seconds to be safe
-        print(f"⌛ Retrying with {primary_model_name}...")
-        try:
-            model = genai.GenerativeModel(primary_model_name)
-            return model.generate_content(prompt) # Retry the primary model
-        except Exception as retry_e:
-            print(f"❌ Retry with {primary_model_name} also failed.")
-            raise retry_e # Re-raise the error after retry
-    
-    except (InternalServerError) as e:
-        # 3. If it's a server error (500s), try the fallback
-        print(f"⚠️  Internal Server Error on {primary_model_name}, trying fallback {fallback_model_name}. Error: {e}")
-        try:
-            model = genai.GenerativeModel(fallback_model_name)
-            return model.generate_content(prompt)
-        except Exception as fallback_e:
-            print(f"❌ Fallback model {fallback_model_name} also failed.")
-            raise fallback_e # Re-raise the fallback error
-            
-    except Exception as e:
-        # 4. Handle other (non-rate-limit) errors by trying fallback
-        print(f"❌ Non-rate-limit error on {primary_model_name}, trying fallback {fallback_model_name}. Error: {e}")
-        try:
-            model = genai.GenerativeModel(fallback_model_name)
-            return model.generate_content(prompt)
-        except Exception as fallback_e:
-            print(f"❌ Fallback model {fallback_model_name} also failed.")
-            raise fallback_e # Re-raise the fallback error
+# Auto-pick support (NewsData.io). Ensure news_picker.py is in the same folder.
+try:
+    import news_picker  # provides pick_top_story(country, category, query)
+except Exception:
+    news_picker = None  # we'll guard in --auto path
 
 # Pexels stock photos
 try:
@@ -490,11 +406,13 @@ Choose terms that are professional, neutral, and visually represent the politica
 
 Photo search terms (2-4 words only):"""
         
-        resp = generate_with_fallback(
-            prompt,
-            primary_model_name=model_name,
-            fallback_model_name="gemini-2.5-pro" # <-- Fallback is now 2.5 Pro
-        )
+        # The primary model is passed in, then fallbacks
+        model_fallbacks = [
+            model_name, 
+            "gemini-2.0-flash", 
+            "gemini-2.0-flash-lite"
+        ]
+        resp = generate_with_model_fallback(prompt, model_fallbacks)
         suggestion = (resp.text or "").strip().strip('"').strip("'")
         
         # Clean up the response - take only first line and limit words
@@ -557,11 +475,13 @@ def gemini_answer(question: str, article: str, model_name: str) -> str:
         # It now *always* uses CONSERVATIVE_SYSTEM
         prompt = f"{CONSERVATIVE_SYSTEM}\n\nNews Information:\n{article}\n\nQuestion:\n{question}\n\nYour Report:"
         
-        resp = generate_with_fallback(
-            prompt,
-            primary_model_name=model_name,
-            fallback_model_name="gemini-2.5-pro" # <-- Fallback is now 2.5 Pro
-        )
+        # The primary model is passed in, then fallbacks
+        model_fallbacks = [
+            model_name, # This will be "gemini-2.5-flash" from the workflow
+            "gemini-2.0-flash", 
+            "gemini-2.0-flash-lite"
+        ]
+        resp = generate_with_model_fallback(prompt, model_fallbacks)
         txt = (resp.text or "").strip()
         if txt:
             return txt
@@ -587,40 +507,31 @@ def main():
 
     # Output / model settings
     ap.add_argument("--duration", type=float, default=4.0, help="Seconds each sentence is shown")
-    
-    # --- THIS IS THE FIX ---
     ap.add_argument("--image-path-prefix", default="", help="Prefix to pre-fill image_path")
-    # -----------------------
-    
     ap.add_argument("--max-words", type=int, default=15, help="Max words per sentence")
     ap.add_argument("--min-words", type=int, default=10, help="Min words per sentence (combine shorter ones)")
     
-    ap.add_argument("--model", default="gemini-2.0-flash-lite", help="Gemini model")
+    # --- THIS IS THE FIX ---
+    ap.add_argument("--model", default="gemini-2.0-flash", help="Gemini model") # <-- FIXED DEFAULT
+    # -----------------------
 
     args = ap.parse_args()
     sheet_key, _, _ = load_env_or_die()
 
-    # --- UPDATED: Auto-pick article (NewsData.io via *new local function*) ---
+    # Auto-pick article (NewsData.io via news_picker)
     title = args.story_title
     url = args.story_url
     if args.auto:
-        # Use our new function that *only* queries the target sources
-        picked = pick_top_story_from_sources(
+        if news_picker is None:
+            sys.exit("news_picker.py not found. Add it next to this script or disable --auto.")
+        picked = news_picker.pick_top_story(
             country=args.country, category=args.topic, query=(args.query or None)
         )
-        
         if not picked:
-            sys.exit("❌ Could not pick a top story from the defined sources. Check NEWSDATA_API_KEY or API logs.")
-        
-        # Note: 'published_at' is now a datetime object from the new function
-        url, title, published_at_dt, score = picked
-        
-        # Convert datetime object to string for saving
-        published_at_str = published_at_dt.isoformat() + "Z" if published_at_dt else dt.datetime.utcnow().isoformat() + "Z"
-
-        print(f"[auto] Picked: {title} ({url}) score={score:.3f} published={published_at_str}")
-        save_article_data(url, title)
-    # ---------------------------------------------------------------------
+            sys.exit("Could not pick a top story. Check NEWSDATA_API_KEY or adjust --country/--topic/--query.")
+        url, title, published_at, score = picked
+        print(f"[auto] Picked: {title} ({url}) score={score:.3f} published={published_at.isoformat()}Z")
+        save_article_data(url, title) # This was already in your new file, which is great
 
     if not url:
         sys.exit("No story URL provided. Use --auto or pass --story_url.")
@@ -678,13 +589,9 @@ def main():
 
     # Write run row (best-effort)
     try:
-        # Get the 'published_at_str' from the --auto block if it exists, otherwise use now()
-        run_published_at = published_at_str if args.auto and 'published_at_str' in locals() else dt.datetime.utcnow().isoformat() + "Z"
-        run_score = score if args.auto and 'score' in locals() else 0.0
-
         ws_runs = _with_retry(lambda: sh.worksheet("Runs"))
         _with_retry(lambda: ws_runs.append_rows([[
-            run_id, url, title or "", run_published_at, run_score
+            run_id, url, title or "", dt.datetime.utcnow().isoformat() + "Z", 0.0
         ]], value_input_option="RAW"))
     except Exception:
         pass

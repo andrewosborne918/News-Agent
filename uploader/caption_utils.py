@@ -12,49 +12,64 @@ import google.generativeai as genai
 import google.auth
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 
-# ... (generate_with_fallback function is identical) ...
-def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
+
+# The new fallback function to use in all 3 files
+# (Remember to add "import time" at the top of each file!)
+def generate_with_model_fallback(prompt: str, model_list: list[str]):
     """
-    Tries to generate content with the primary model.
-    - If a rate limit error (429) occurs, it pauses for 61 seconds and retries.
-    - If another error (like 500) occurs, it tries the fallback model.
+    Tries to generate content with a list of models, falling back on quota errors.
     """
-    try:
-        # 1. Try the primary model
-        model = genai.GenerativeModel(primary_model_name)
-        return model.generate_content(prompt)
+    if not model_list:
+        raise ValueError("Model list cannot be empty.")
     
-    except ResourceExhausted as e:
-        # 2. If rate limited (429), PAUSE and RETRY
-        print(f"⚠️  Rate limit on {primary_model_name}. Pausing for 61 seconds... Error: {e}")
-        time.sleep(61) # Pause for 61 seconds to be safe
-        print(f"⌛ Retrying with {primary_model_name}...")
-        try:
-            model = genai.GenerativeModel(primary_model_name)
-            return model.generate_content(prompt) # Retry the primary model
-        except Exception as retry_e:
-            print(f"❌ Retry with {primary_model_name} also failed.")
-            raise retry_e # Re-raise the error after retry
+    last_error = None
     
-    except (InternalServerError) as e:
-        # 3. If it's a server error (500s), try the fallback
-        print(f"⚠️  Internal Server Error on {primary_model_name}, trying fallback {fallback_model_name}. Error: {e}")
+    for i, model_name in enumerate(model_list):
+        is_last_model = (i == len(model_list) - 1)
+        
         try:
-            model = genai.GenerativeModel(fallback_model_name)
+            print(f"ℹ️  Attempting generation with: {model_name}")
+            model = genai.GenerativeModel(model_name)
             return model.generate_content(prompt)
-        except Exception as fallback_e:
-            print(f"❌ Fallback model {fallback_model_name} also failed.")
-            raise fallback_e # Re-raise the fallback error
-            
-    except Exception as e:
-        # 4. Handle other (non-rate-limit) errors by trying fallback
-        print(f"❌ Non-rate-limit error on {primary_model_name}, trying fallback {fallback_model_name}. Error: {e}")
-        try:
-            model = genai.GenerativeModel(fallback_model_name)
-            return model.generate_content(prompt)
-        except Exception as fallback_e:
-            print(f"❌ Fallback model {fallback_model_name} also failed.")
-            raise fallback_e # Re-raise the fallback error
+        
+        except ResourceExhausted as e:
+            # 429 Quota Error. Try the next model.
+            print(f"⚠️  Quota limit on {model_name}. Trying next model...")
+            last_error = e
+            if is_last_model:
+                print(f"❌ All fallback models are also rate-limited. Raising error.")
+                raise e
+            continue # Try next model
+        
+        except (InternalServerError) as e:
+            # 500 Server Error. Pause, retry *this* model once.
+            print(f"⚠️  Server error on {model_name}. Pausing for 10s and retrying...")
+            last_error = e
+            time.sleep(10)
+            try:
+                model = genai.GenerativeModel(model_name)
+                return model.generate_content(prompt)
+            except Exception as retry_e:
+                print(f"❌ Retry failed for {model_name}. Trying next model...")
+                last_error = retry_e
+                if is_last_model:
+                    raise retry_e
+                continue # Try next model
+                
+        except Exception as e:
+            # Other error (Safety, etc.). Try the next model immediately.
+            print(f"❌ Non-quota error on {model_name}: {e}. Trying next model...")
+            last_error = e
+            if is_last_model:
+                print(f"❌ All fallback models also failed. Raising error.")
+                raise e
+            continue # Try next model
+    
+    # This should not be reachable, but as a safeguard
+    if last_error:
+        raise last_error
+    else:
+        raise Exception("Failed to generate content after trying all models.")
 
 # ... (All helper functions from _GEMINI_API_KEY_CACHE to _looks_generic are identical) ...
 # --- Caching and Helpers ---
@@ -258,11 +273,12 @@ def summarize_with_gemini(
     """
     
     try:
-        response = generate_with_fallback(
-            prompt,
-            primary_model_name='gemini-2.0-flash', 
-            fallback_model_name='gemini-2.5-pro'
-        )
+        model_fallbacks = [
+            "gemini-2.5-flash", 
+            "gemini-2.0-flash", 
+            "gemini-2.0-flash-lite"
+        ]
+        response = generate_with_model_fallback(prompt, model_fallbacks)
         json_text = _extract_json(response.text)
         ai_data = json.loads(json_text)
         
