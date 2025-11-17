@@ -3,7 +3,7 @@ import json
 import os
 import logging
 import re
-import time # <-- ADDED THIS IMPORT
+import time
 from typing import Dict, Any, List, Tuple, Optional
 
 import gspread
@@ -12,7 +12,7 @@ import google.generativeai as genai
 import google.auth
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 
-# --- THIS IS THE CORRECTED, SINGLE FUNCTION ---
+# ... (generate_with_fallback function is identical) ...
 def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
     """
     Tries to generate content with the primary model.
@@ -56,6 +56,7 @@ def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
             print(f"❌ Fallback model {fallback_model_name} also failed.")
             raise fallback_e # Re-raise the fallback error
 
+# ... (All helper functions from _GEMINI_API_KEY_CACHE to _looks_generic are identical) ...
 # --- Caching and Helpers ---
 _GEMINI_API_KEY_CACHE: Optional[str] = None
 logger = logging.getLogger(__name__)
@@ -125,7 +126,7 @@ def _get_answers_from_sheet(run_id_key: str) -> Optional[str]:
             if row_index < len(all_data_col_values):
                 answer_text = all_data_col_values[row_index]
                 if answer_text and isinstance(answer_text, str):
-                    answer_texts.append(answer_text.strip())
+                    answer_texts.append(answer_text..strip())
             else:
                 logger.warning(f"[sheets] Found cell at row {cell.row} but data column {SHEET_DATA_COLUMN} was short.")
 
@@ -232,7 +233,7 @@ def summarize_with_gemini(
 
     topic_prompt = f"The story is about: {topic_hint}\n" if topic_hint else ""
     
-    # --- START: NEW PROMPT ---
+    # --- THIS PROMPT IS NOW USED FOR BOTH VIDEOS AND IMAGES ---
     prompt = f"""
     **Your Role:** You are a senior news analyst and editor for "RightSide Report," a news outlet with a strong conservative perspective.
     **Your Core Principles:** Your analysis is always guided by the principles of fiscal responsibility, limited government, individual liberty, and a strong national defense.
@@ -251,17 +252,16 @@ def summarize_with_gemini(
     **JSON FORMAT:**
     {{
       "title": "A concise, compelling title that frames the conservative angle (max 90 chars).",
-      "description": "A short, engaging paragraph (2-3 sentences) that explains the story from our perspective, focusing on its impact on our core principles.",
+      "description": "A short, engaging paragraph (2-3 sentences) that explains the story from our perspective, focusing on its impact on our core principles. For image posts, this can be the full text.",
       "hashtags": ["list", "of", "5", "relevant", "hashtags", "like", "Conservative", "LimitedGov", "Taxes"]
     }}
     """
-    # --- END: NEW PROMPT ---
     
     try:
         response = generate_with_fallback(
             prompt,
-            primary_model_name='gemini-2.0-flash', # <-- FIXED PRIMARY
-            fallback_model_name='gemini-2.5-pro' # <-- FIXED FALLBACK
+            primary_model_name='gemini-2.0-flash', 
+            fallback_model_name='gemini-2.5-pro'
         )
         json_text = _extract_json(response.text)
         ai_data = json.loads(json_text)
@@ -276,7 +276,7 @@ def summarize_with_gemini(
         logger.exception(f"[gemini] Failed to generate content: {e}")
         return None
 
-# --- Main Public Function ---
+# --- Main Public Function (UPDATED) ---
 
 def get_title_description_tags(meta: Dict) -> Tuple[str, str, List[str]]:
     """
@@ -287,64 +287,74 @@ def get_title_description_tags(meta: Dict) -> Tuple[str, str, List[str]]:
     description = (meta.get("description") or meta.get("Description") or "").strip()
     hashtags_raw = meta.get("hashtags") or meta.get("tags") or []
     hashtags_list = _coerce_hashtag_list(hashtags_raw)
-
-    # Check if the captions from meta are generic/bad
-    needs_ai = _looks_generic(title) or _looks_generic(description) or not hashtags_list
-
-    if needs_ai:
-        logger.warning("[caption] Meta captions look generic. Attempting AI generation.")
+    
+    # --- NEW: Get Post Type ---
+    post_type = meta.get("post_type", "video") # Default to video
+    
+    # --- UPDATED LOGIC ---
+    source = None
+    
+    if post_type == "image":
+        # For images, the text is already in the JSON.
+        # We will use this text AS the description.
+        logger.info("[caption] Image post type found. Using 'text' from JSON.")
+        source = meta.get("text", "")
+        # For images, the full text *is* the description
+        description = source 
         
-        # --- THIS IS THE NEW LOGIC ---
-        source = None
+        # We still generate a title and hashtags from this text
+        needs_ai = True 
         
-        # 1. Try to get source text from Google Sheet first
-        #    Look for 'run_id' first, as seen in the sheet
-        article_key = meta.get("run_id") or meta.get("article_id") or meta.get("id")
-        if not article_key:
-             # Fallback to title if no ID is present
-             article_key = title
-                
-        if article_key:
-            source = _get_answers_from_sheet(article_key)
-        
-        # 2. If Sheet fails, fall back to the old logic (text from JSON)
-        if not source:
-            logger.warning("[caption] Could not find in Sheet, falling back to JSON.")
-            source = (
-                meta.get("transcript")
-                or meta.get("summary")
-                or meta.get("text")
-                or description
-                or title
-                or ""
-            )
-        source = str(source).strip()
-        # --- END NEW LOGIC ---
+    else: # Video post logic (unchanged)
+        needs_ai = _looks_generic(title) or _looks_generic(description) or not hashtags_list
+        if needs_ai:
+            logger.warning("[caption] Video captions look generic. Attempting AI gen.")
+            article_key = meta.get("run_id") or meta.get("article_id") or meta.get("id")
+            if not article_key:
+                 article_key = title
+            
+            if article_key:
+                source = _get_answers_from_sheet(article_key)
+            
+            if not source:
+                logger.warning("[caption] Could not find in Sheet, falling back to JSON.")
+                source = (
+                    meta.get("transcript")
+                    or meta.get("summary")
+                    or meta.get("text")
+                    or description
+                    or title
+                    or ""
+                )
+    
+    source = str(source).strip()
 
-        if source and not _looks_generic(source): # Don't send generic text to AI
-            ai_data = summarize_with_gemini(source, topic_hint=title)
-            if ai_data:
-                # Use AI data, falling back to meta data if a key is missing
-                title = (ai_data.get("title") or title).strip()
+    if needs_ai and source and not _looks_generic(source):
+        ai_data = summarize_with_gemini(source, topic_hint=title)
+        if ai_data:
+            # Use AI data, falling back to meta data if a key is missing
+            title = (ai_data.get("title") or title).strip()
+            # For images, we want the *full text* as the description, not the AI summary.
+            if post_type != "image":
                 description = (ai_data.get("description") or description).strip()
-                hashtags_list = _coerce_hashtag_list(ai_data.get("hashtags") or hashtags_list)
-        else:
-            logger.warning("[caption] No usable source text found for AI generation.")
+            
+            hashtags_list = _coerce_hashtag_list(ai_data.get("hashtags") or hashtags_list)
+    else:
+        logger.warning("[caption] No usable source text found for AI generation.")
 
     # Final cleanup and normalization
     if not title:
-        title = "News Update" # Final fallback title
+        title = "News Update"
     
-    if not description and title != "News Update":
+    if not description:
         description = title 
     
     if not hashtags_list:
-        hashtags_list = ["News", "Politics", "BreakingNews"] # Final fallback tags
+        hashtags_list = ["News", "Politics", "BreakingNews"]
 
     final_tags = _normalize_hashtags(hashtags_list)
     
-    # Truncate for platform limits
-    final_title = title[:100] # YouTube limit
-    final_description = description[:5000] # YouTube limit
+    final_title = title[:100]
+    final_description = description[:5000] # Use full text for images
 
     return final_title, final_description, final_tags

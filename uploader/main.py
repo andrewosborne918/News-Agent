@@ -63,8 +63,9 @@ def gcs_to_social(event):
     bucket = data.get("bucket")
     name = data.get("name")
 
-    if not bucket or not name or not name.endswith(".json"):
-        print(f"skip: not a metadata JSON -> bucket={bucket} name={name}")
+    # Only trigger on the .json metadata file
+    if not bucket or not name or not name.startswith("incoming/") or not name.endswith(".json"):
+        print(f"skip: not an incoming metadata JSON -> bucket={bucket} name={name}")
         return
 
     # 1. Check if job is already done (Idempotency)
@@ -91,9 +92,7 @@ def gcs_to_social(event):
         # 4. Release Lock (Always cleanup the .processing file)
         _delete_marker(bucket, name, ".processing")
 
-print("[startup] cwd:", os.getcwd())
-print("[startup] dir contents:", os.listdir(os.path.dirname(__file__)))
-
+# ... (All functions from _download_gcs_to_tempfile to _load_json remain identical) ...
 
 def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
     """Download gs://bucket/blob to a local temp file and return the local path."""
@@ -164,11 +163,11 @@ def _load_json(bucket_name: str, json_blob_name: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-
+# --- UPDATED FUNCTION ---
 def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, int]:
     """
-    Reads companion JSON, ensures caption present, and kicks off publishing.
-    Returns (message, http_status).
+    Reads companion JSON, determines post type (video or image),
+    generates captions, and kicks off publishing.
     """
     print("Processor invoked")
     print("============================================================")
@@ -183,32 +182,76 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         _create_post_marker(bucket_name, json_blob_name, ".failed", f"Failed to load JSON: {e}")
         return ("failed to load metadata", 200) 
 
+    # --- NEW: Determine Post Type ---
+    post_type = meta.get("post_type", "video") # Default to 'video' for backwards compatibility
+    base_no_ext = os.path.splitext(json_blob_name)[0]
+    
     # Use get_title_description_tags for robust AI-powered caption generation
     try:
+        # This function is smart. If it's an image, it will use meta['text'].
+        # If it's a video, it will use meta['run_id'] to get text from the Sheet.
         title, description, tags = get_title_description_tags(meta)
+        
         logger.info("[caption] Successfully generated captions.")
         logger.info(f"[caption] Title: {title}")
-        logger.info(f"[caption] Run ID: {meta.get('run_id')}")
     except Exception as e:
         logger.exception("ERROR: get_title_description_tags failed: %s", e)
         _create_post_marker(bucket_name, json_blob_name, ".failed", f"Failed to generate captions: {e}")
         return ("failed to generate captions", 200)
 
-    base_no_ext = os.path.splitext(json_blob_name)[0]
-    video_blob_name = base_no_ext + ".mp4"
-    print(f"  Video candidate: {video_blob_name}")
+    # --- This is the new text for the Facebook Image Post ---
+    # The 3-4 paragraphs from Gemini will be the "description"
+    # The title will be the title (we won't use it for FB images)
+    # This is different from your video, which combines title+desc
+    fb_image_caption = description
+    
+    # --- This is the text for Video Posts (unchanged) ---
+    fb_video_description = f"{title}\n\n{description}"
 
-    local_video_path = None
+
+    local_media_path = None
     try:
-        local_video_path = _download_gcs_to_tempfile(bucket_name, video_blob_name)
-        
-        print(f"Uploading to YouTube (local): {local_video_path}")
-        _upload_youtube(local_video_path, title, description, tags)
-        print("[youtube] done")
+        # --- NEW LOGIC ---
+        if post_type == "image":
+            # Find the companion image file (e.g., .png, .jpg)
+            # We check a few extensions
+            media_blob_name = None
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            
+            for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+                potential_name = f"{base_no_ext}{ext}"
+                if bucket.blob(potential_name).exists():
+                    media_blob_name = potential_name
+                    break
+            
+            if not media_blob_name:
+                raise FileNotFoundError(f"Could not find matching image for {json_blob_name}")
+            
+            print(f"  Image candidate: {media_blob_name}")
+            local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
+            
+            print(f"Uploading to Facebook (Image): {local_media_path}")
+            _upload_facebook_image(local_media_path, fb_image_caption)
+            print("[facebook] done")
+            
+            # Note: We are not uploading images to YouTube
 
-        print(f"Uploading to Facebook (local): {local_video_path}")
-        _upload_facebook(local_video_path, title, description)
-        print("[facebook] done")
+        else: # Default to video
+            media_blob_name = base_no_ext + ".mp4"
+            print(f"  Video candidate: {media_blob_name}")
+            
+            local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
+            
+            print(f"Uploading to YouTube (Video): {local_media_path}")
+            _upload_youtube(local_media_path, title, description, tags)
+            print("[youtube] done")
+
+            print(f"Uploading to Facebook (Video): {local_media_path}")
+            _upload_facebook_video(local_media_path, title, fb_video_description)
+            print("[facebook] done")
+        
+        # --- END NEW LOGIC ---
         
         _create_post_marker(bucket_name, json_blob_name, ".posted", "Success")
         
@@ -217,15 +260,16 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         _create_post_marker(bucket_name, json_blob_name, ".failed", f"Publish failed: {e}\n{traceback.format_exc()}")
     finally:
         try:
-            if local_video_path and os.path.exists(local_video_path):
-                os.remove(local_video_path)
-                print(f"Cleaned up temp file: {local_video_path}")
+            if local_media_path and os.path.exists(local_media_path):
+                os.remove(local_media_path)
+                print(f"Cleaned up temp file: {local_media_path}")
         except Exception:
             pass
 
     return (f"ok: processed {json_blob_name}", 200)
 
-# --- MODIFIED: YOUTUBE UPLOAD ---
+# ... (_upload_youtube remains identical) ...
+
 def _upload_youtube(local_filename: str, title: str, description: str, tags: list[str] | None = None):
     """Uploads a video to YouTube from a local file path."""
     logger.info("[youtube] Starting YouTube upload...")
@@ -245,10 +289,7 @@ def _upload_youtube(local_filename: str, title: str, description: str, tags: lis
             scopes=["https://www.googleapis.com/auth/youtube.upload"]
         )
         
-        # --- THIS IS THE FIX ---
-        # We must use the transport object from google.auth, not requests
         creds.refresh(google_auth_requests.Request())
-        # -----------------------
         
         youtube = build("youtube", "v3", credentials=creds)
         
@@ -291,11 +332,10 @@ def _upload_youtube(local_filename: str, title: str, description: str, tags: lis
         logger.exception(f"[youtube] Failed to upload: {e}")
         raise 
 
-
-# --- MODIFIED: FACEBOOK UPLOAD ---
-def _upload_facebook(local_filename: str, title: str, description: str):
-    """Uploads a video to Facebook from a local file path."""
-    logger.info("[facebook] Starting Facebook upload...")
+# --- RENAMED this function ---
+def _upload_facebook_video(local_filename: str, title: str, description: str):
+    """Uploads a VIDEO to Facebook from a local file path."""
+    logger.info("[facebook] Starting Facebook VIDEO upload...")
     
     page_token = _get_secret("FACEBOOK_PAGE_TOKEN")
     page_id = _get_secret("FB_PAGE_ID")
@@ -305,11 +345,10 @@ def _upload_facebook(local_filename: str, title: str, description: str):
         raise Exception("FACEBOOK_PAGE_TOKEN or FB_PAGE_ID secrets are missing.")
 
     url = f"https://graph-video.facebook.com/v20.0/{page_id}/videos"
-    fb_description = f"{title}\n\n{description}"
     
     params = {
         "access_token": page_token,
-        "description": fb_description,
+        "description": description,
         "title": title
     }
 
@@ -323,11 +362,50 @@ def _upload_facebook(local_filename: str, title: str, description: str):
         response_data = response.json()
         
         if response.status_code == 200 and "id" in response_data:
-            logger.info(f"[facebook] Upload successful! Video ID: {response_data['id']}")
+            logger.info(f"[facebook] Video upload successful! Video ID: {response_data['id']}")
         else:
-            logger.error(f"[facebook] Upload failed. Status: {response.status_code}, Response: {response_data}")
-            raise Exception(f"Facebook upload failed: {response_data}")
+            logger.error(f"[facebook] Video upload failed. Status: {response.status_code}, Response: {response_data}")
+            raise Exception(f"Facebook video upload failed: {response_data}")
 
     except Exception as e:
-        logger.exception(f"[facebook] Failed to upload: {e}")
+        logger.exception(f"[facebook] Failed to upload video: {e}")
+        raise
+
+# --- NEW FUNCTION ---
+def _upload_facebook_image(local_filename: str, caption: str):
+    """Uploads an IMAGE to Facebook from a local file path."""
+    logger.info("[facebook] Starting Facebook IMAGE upload...")
+    
+    page_token = _get_secret("FACEBOOK_PAGE_TOKEN")
+    page_id = _get_secret("FB_PAGE_ID")
+    
+    if not page_token or not page_id:
+        logger.error("[facebook] FATAL: FACEBOOK_PAGE_TOKEN or FB_PAGE_ID secrets are missing.")
+        raise Exception("FACEBOOK_PAGE_TOKEN or FB_PAGE_ID secrets are missing.")
+
+    url = f"https://graph.facebook.com/v20.0/{page_id}/photos"
+    
+    params = {
+        "access_token": page_token,
+        "caption": caption,
+    }
+
+    try:
+        with open(local_filename, 'rb') as f:
+            files = {
+                # Use a generic 'image/jpeg' which works for png too
+                'source': (os.path.basename(local_filename), f, 'image/jpeg')
+            }
+            response = requests.post(url, params=params, files=files, timeout=300) 
+            
+        response_data = response.json()
+        
+        if response.status_code == 200 and "id" in response_data:
+            logger.info(f"[facebook] Image post successful! Post ID: {response_data['id']}")
+        else:
+            logger.error(f"[facebook] Image post failed. Status: {response.status_code}, Response: {response_data}")
+            raise Exception(f"Facebook image post failed: {response_data}")
+
+    except Exception as e:
+        logger.exception(f"[facebook] Failed to post image: {e}")
         raise
