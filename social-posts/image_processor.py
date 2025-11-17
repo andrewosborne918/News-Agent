@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
 """
 image_processor.py
-
-Workflow:
-1.  Connects to Google Drive.
-2.  Picks one image from the SOURCE_DRIVE_FOLDER_ID.
-3.  Downloads the image locally.
-4.  Sends the image to Gemini to generate a 3-4 paragraph post.
-5.  Uploads the image and a companion .json file to GCS.
-6.  Moves the image file in Google Drive to USED_DRIVE_FOLDER_ID.
 """
 
 import os
@@ -20,9 +12,10 @@ from typing import Dict, Optional, Tuple
 
 # --- Google / Gemini ---
 import google.generativeai as genai
+import google.auth.transport.requests # <-- ADDED
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 from google.cloud import storage 
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials  # <-- CHANGED
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from googleapiclient.errors import HttpError
@@ -36,12 +29,14 @@ USED_FOLDER_ID = os.environ.get("USED_DRIVE_FOLDER_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GCS_BUCKET = os.environ.get("GCS_BUCKET") 
 MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-2.5-flash")
-
-# --- MODIFIED LINE ---
-FALLBACK_MODEL_NAME = "gemini-2.0-flash" 
-# ---
+FALLBACK_MODEL_NAME = os.environ.get("FALLBACK_MODEL_NAME", "gemini-2.0-flash") # <-- KEPT YOUR FALLBACK
 
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
+
+# --- OAuth Constants ---
+GDRIVE_CLIENT_ID = os.environ.get("GDRIVE_CLIENT_ID")
+GDRIVE_CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET")
+GDRIVE_REFRESH_TOKEN = os.environ.get("GDRIVE_REFRESH_TOKEN")
 
 # ---
 # This is your existing fallback function
@@ -96,30 +91,35 @@ def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
             raise fallback_e # Re-raise the fallback error
 
 # ---
-# --- This is the updated auth function ---
+# --- COMPLETELY REPLACED FUNCTION ---
 # ---
 def get_gdrive_service():
-    """Authenticates using the JSON key path and returns a Google Drive v3 service object."""
-    print("🔐 Authenticating to Google Drive using Service Account JSON...")
-    SCOPES = ['https.www.googleapis.com/auth/drive']
-    JSON_PATH = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_PATH")
+    """Authenticates using user OAuth 2.0 credentials."""
+    print("🔐 Authenticating to Google Drive using OAuth 2.0 Refresh Token...")
+    SCOPES = ['https://www.googleapis.com/auth/drive']
     
-    if not JSON_PATH:
-        print("❌ Error: GOOGLE_SERVICE_ACCOUNT_JSON_PATH environment variable not set.")
-        sys.exit(1)
-        
-    if not os.path.exists(JSON_PATH):
-        print(f"❌ Error: Service account file not found at: {JSON_PATH}")
+    if not all([GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, GDRIVE_REFRESH_TOKEN]):
+        print("❌ Error: Missing one or more GDRIVE OAuth environment variables.")
         sys.exit(1)
 
     try:
-        creds = service_account.Credentials.from_service_account_file(
-            JSON_PATH, scopes=SCOPES)
+        creds = Credentials(
+            None, # No access token, we'll get one with the refresh token
+            refresh_token=GDRIVE_REFRESH_TOKEN,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=GDRIVE_CLIENT_ID,
+            client_secret=GDRIVE_CLIENT_SECRET,
+            scopes=SCOPES
+        )
+        
+        # Refresh the token to get a valid access token
+        creds.refresh(google.auth.transport.requests.Request())
+        
         service = build('drive', 'v3', credentials=creds)
-        print("✅ Google Drive service authenticated.")
+        print("✅ Google Drive service authenticated as user.")
         return service
     except Exception as e:
-        print(f"❌ Failed to authenticate with service account JSON: {e}")
+        print(f"❌ Failed to authenticate with OAuth 2.0: {e}")
         sys.exit(1)
 
 def get_first_image_from_drive(service) -> Optional[Dict[str, str]]:
@@ -213,11 +213,11 @@ RULES:
         print(f"❌ Error during Gemini generation: {e}")
         return None
 
-# --- NEW FUNCTION ---
 def upload_to_gcs(local_file_path: str, blob_name: str):
     """Uploads a local file to the GCS bucket."""
     print(f"☁️  Uploading {blob_name} to GCS bucket {GCS_BUCKET}...")
     try:
+        # This will use the service account auth from `gcloud-github-actions/auth`
         storage_client = storage.Client()
         bucket = storage_client.bucket(GCS_BUCKET)
         blob = bucket.blob(f"incoming/{blob_name}") # Upload to the 'incoming' folder
@@ -228,15 +228,13 @@ def upload_to_gcs(local_file_path: str, blob_name: str):
         print(f"❌ GCS Upload failed: {e}")
         raise # Re-raise the exception to fail the workflow
 
-# --- NEW FUNCTION ---
 def create_and_upload_json(post_text: str, base_filename: str):
     """Creates a companion JSON file and uploads it to GCS."""
     local_json_path = f"./temp_{base_filename}.json"
     
-    # This is the metadata your Cloud Function will read
     metadata = {
-        "text": post_text, # The full 3-4 paragraphs
-        "post_type": "image", # Tells the Cloud Function this is an image
+        "text": post_text,
+        "post_type": "image",
         "original_filename": base_filename
     }
     
@@ -248,7 +246,7 @@ def create_and_upload_json(post_text: str, base_filename: str):
         
     finally:
         if os.path.exists(local_json_path):
-            os.remove(local_json_path) # Clean up local JSON
+            os.remove(local_json_path)
 
 def move_drive_file(service, file_id: str):
     """Moves the file from the source folder to the used folder."""
@@ -282,7 +280,6 @@ def main():
         print("🏁 No new images to process. Exiting.")
         sys.exit(0)
     
-    # Use the file ID as the unique base name
     base_filename = image_file['id']
     original_file_extension = os.path.splitext(image_file['name'])[1]
     
@@ -300,23 +297,18 @@ def main():
         print(post_content)
         print("----------------------\n")
         
-        # --- REPLACED FACEBOOK POST WITH GCS UPLOAD ---
         print("🚀 Starting GCS upload process...")
         
-        # 1. Upload the image file (e.g., 12345.png)
         image_blob_name = f"{base_filename}{original_file_extension}"
         upload_to_gcs(local_image_path, image_blob_name)
         
-        # 2. Create and upload the JSON file (e.g., 12345.json)
         create_and_upload_json(post_content, base_filename)
         
         print("✅ GCS upload complete. Cloud Function will post to Facebook.")
         
-        # 3. Move the file in Google Drive
         move_drive_file(drive_service, image_file['id'])
             
     finally:
-        # Clean up the local temp image file
         if os.path.exists(local_image_path):
             print(f"🧹 Cleaning up temp file: {local_image_path}")
             os.remove(local_image_path)
