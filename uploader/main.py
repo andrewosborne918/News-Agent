@@ -92,7 +92,6 @@ def gcs_to_social(event):
         # 4. Release Lock (Always cleanup the .processing file)
         _delete_marker(bucket, name, ".processing")
 
-# ... (All functions from _download_gcs_to_tempfile to _load_json remain identical) ...
 
 def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
     """Download gs://bucket/blob to a local temp file and return the local path."""
@@ -163,7 +162,42 @@ def _load_json(bucket_name: str, json_blob_name: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-# --- UPDATED FUNCTION ---
+# --- NEW FUNCTION FOR MAKE.COM - NOW TAKES ANY URL ---
+def _trigger_make_tiktok_scenario(video_url: str, description: str):
+    """
+    Sends the video URL (now a public YouTube URL) and description to a Make.com webhook.
+    """
+    logger.info("[make] Attempting to trigger Make.com scenario...")
+    
+    webhook_url = _get_secret("MAKE_WEBHOOK_URL")
+    if not webhook_url:
+        logger.warning("[make] MAKE_WEBHOOK_URL secret is missing. Skipping Make.com trigger.")
+        return
+
+    payload = {
+        # video_url is now a public YouTube link instead of GCS URI
+        "video_url": video_url, 
+        "caption": description,
+    }
+
+    try:
+        response = requests.post(
+            webhook_url, 
+            json=payload, 
+            timeout=10 # Short timeout, as this is a non-critical side effect
+        )
+        
+        # Raise HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status() 
+        
+        logger.info(f"[make] Webhook successfully triggered. Status: {response.status_code}. Response: {response.text}")
+
+    except requests.exceptions.RequestException as e:
+        # Log the failure but don't re-raise, as YouTube/FB already succeeded.
+        logger.error(f"[make] Failed to trigger Make.com webhook: {e}")
+# --- END NEW FUNCTION ---
+
+
 def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, int]:
     """
     Reads companion JSON, determines post type (video or image),
@@ -188,8 +222,6 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
     
     # Use get_title_description_tags for robust AI-powered caption generation
     try:
-        # This function is smart. If it's an image, it will use meta['text'].
-        # If it's a video, it will use meta['run_id'] to get text from the Sheet.
         title, description, tags = get_title_description_tags(meta)
         
         logger.info("[caption] Successfully generated captions.")
@@ -200,9 +232,6 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         return ("failed to generate captions", 200)
 
     # --- This is the new text for the Facebook Image Post ---
-    # The 3-4 paragraphs from Gemini will be the "description"
-    # The title will be the title (we won't use it for FB images)
-    # This is different from your video, which combines title+desc
     fb_image_caption = description
     
     # --- This is the text for Video Posts (unchanged) ---
@@ -211,10 +240,10 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
 
     local_media_path = None
     try:
-        # --- NEW LOGIC ---
+        youtube_video_id = None # Initialize variable to hold the YouTube ID
+
         if post_type == "image":
-            # Find the companion image file (e.g., .png, .jpg)
-            # We check a few extensions
+            # Image posting logic remains the same
             media_blob_name = None
             client = storage.Client()
             bucket = client.bucket(bucket_name)
@@ -234,22 +263,28 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
             print(f"Uploading to Facebook (Image): {local_media_path}")
             _upload_facebook_image(local_media_path, fb_image_caption)
             print("[facebook] done")
-            
-            # Note: We are not uploading images to YouTube
-
-        else: # Default to video
+        else: # Video processing
             media_blob_name = base_no_ext + ".mp4"
             print(f"  Video candidate: {media_blob_name}")
             
             local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
             
             print(f"Uploading to YouTube (Video): {local_media_path}")
-            _upload_youtube(local_media_path, title, description, tags)
+            # --- MODIFIED: Capture the returned video ID ---
+            youtube_video_id = _upload_youtube(local_media_path, title, description, tags)
             print("[youtube] done")
 
             print(f"Uploading to Facebook (Video): {local_media_path}")
             _upload_facebook_video(local_media_path, title, fb_video_description)
             print("[facebook] done")
+        
+        # --- NEW: Trigger Make.com ONLY if a video was posted to YouTube ---
+        if youtube_video_id:
+            # Send the public YouTube URL to Make.com
+            public_youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
+            print(f"Triggering Make.com for TikTok via Buffer with public URL: {public_youtube_url}")
+            _trigger_make_tiktok_scenario(public_youtube_url, fb_video_description)
+            print("[make] done")
         
         # --- END NEW LOGIC ---
         
@@ -268,10 +303,8 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
 
     return (f"ok: processed {json_blob_name}", 200)
 
-# ... (_upload_youtube remains identical) ...
-
-def _upload_youtube(local_filename: str, title: str, description: str, tags: list[str] | None = None):
-    """Uploads a video to YouTube from a local file path."""
+def _upload_youtube(local_filename: str, title: str, description: str, tags: list[str] | None = None) -> str:
+    """Uploads a video to YouTube from a local file path. Returns the video ID."""
     logger.info("[youtube] Starting YouTube upload...")
     creds_json_str = _get_secret("YOUTUBE_CREDENTIALS_JSON")
     if not creds_json_str:
@@ -327,12 +360,12 @@ def _upload_youtube(local_filename: str, title: str, description: str, tags: lis
                 raise
 
         logger.info(f"[youtube] Upload successful! Video ID: {response['id']}")
+        return response['id'] # <<< RETURNS THE VIDEO ID
 
     except Exception as e:
         logger.exception(f"[youtube] Failed to upload: {e}")
         raise 
 
-# --- RENAMED this function ---
 def _upload_facebook_video(local_filename: str, title: str, description: str):
     """Uploads a VIDEO to Facebook from a local file path."""
     logger.info("[facebook] Starting Facebook VIDEO upload...")
@@ -371,7 +404,6 @@ def _upload_facebook_video(local_filename: str, title: str, description: str):
         logger.exception(f"[facebook] Failed to upload video: {e}")
         raise
 
-# --- NEW FUNCTION ---
 def _upload_facebook_image(local_filename: str, caption: str):
     """Uploads an IMAGE to Facebook from a local file path."""
     logger.info("[facebook] Starting Facebook IMAGE upload...")

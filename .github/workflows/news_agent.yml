@@ -199,6 +199,6 @@ jobs:
             --memory=1Gi \
             --timeout=540s \
             --retry \
-            --set-secrets=FACEBOOK_PAGE_TOKEN=FACEBOOK_PAGE_TOKEN:latest,FB_PAGE_ID=FB_PAGE_ID:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_CREDENTIALS_JSON=YOUTUBE_CREDENTIALS_JSON:latest \
-            --set-env-vars=GCP_PROJECT=${{ secrets.GCP_PROJECT_ID }},GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }} \
+            --set-secrets=FACEBOOK_PAGE_TOKEN=FACEBOOK_PAGE_TOKEN:latest,FB_PAGE_ID=FB_PAGE_ID:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_CREDENTIALS_JSON=YOUTUBE_CREDENTIALS_JSON:latest,MAKE_WEBHOOK_URL=MAKE_WEBHOOK_URL:latest \
+            --set-env-vars=GCP_PROJECT=${{ secrets.GCP_PROJECT_ID }},GOOGLE_CLOUD_PROJECT=${{ secrets.CP_PROJECT_ID }} \
             --source=build/gcs-to-social
