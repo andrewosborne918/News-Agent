@@ -205,7 +205,7 @@ RULES:
             fallback_model_name=FALLBACK_MODEL_NAME
         )
         
-        post_text = response.text..strip()
+        post_text = response.text.strip()
         
         if not post_text or len(post_text.split()) < 50:
             print("❌ Gemini returned an empty or very short response.")
