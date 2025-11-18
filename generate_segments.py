@@ -5,6 +5,8 @@ generate_segments.py
 Features:
 - (--auto) Pick the most popular/recency-weighted article via news_picker.pick_top_story()
   (NewsData.io under the hood). Defaults to politics.
+- **NEW**: Uses AI to check the core topic of the picked story against the last 3 stories
+  in the Runs tab to prevent running on the same major topic repeatedly.
 - Otherwise use --story_url / --story_title
 - Fetch article text with fallbacks (normal -> Reuters AMP -> reader mirror)
 - (Optional) --article_text to bypass fetching
@@ -21,12 +23,12 @@ Google Sheet tabs expected:
 import os
 import sys
 import re
-import time # This was already here, which is good.
+import time
 import argparse
 import datetime as dt
 import json
 import random
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -360,6 +362,114 @@ def append_rows_safe(ws, rows: List[List], batch_size: int = 100):
         _with_retry(lambda: ws.append_rows(chunk, value_input_option="RAW"))
         time.sleep(0.2)
 
+
+# ========================= AI Deduplication =========================
+
+def get_past_topics(sh: gspread.models.Spreadsheet, num_past: int = 3, model_name: str = "gemini-2.5-flash") -> List[str]:
+    """
+    Reads the last 'num_past' story titles from the Runs tab and uses Gemini
+    to generate a 3-word topic for each.
+    """
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        print("  ⚠️ Skipping past topic analysis: GEMINI_API_KEY is missing.")
+        return []
+        
+    try:
+        genai.configure(api_key=key)
+        ws_runs = _with_retry(lambda: sh.worksheet("Runs"))
+        
+        # Runs tab columns: run_id, story_url, story_title, published_at, score
+        # Get all values to quickly extract titles (index 2)
+        all_values = _with_retry(lambda: ws_runs.get_all_values())
+        if not all_values or len(all_values) < 2: # Check for header row
+            return []
+        
+        # Get the titles (index 2) from the last 'num_past' rows (excluding header)
+        past_titles = [row[2] for row in all_values[1:]][-num_past:]
+        past_titles.reverse() # Most recent first
+        
+        if not past_titles:
+            return []
+            
+        print(f"🔎 Analyzing last {len(past_titles)} stories for topic duplication...")
+        
+        # Combine titles into a single prompt for efficiency
+        title_list = "\n".join([f"- {title}" for title in past_titles])
+        prompt = f"""Analyze the following list of recent news article titles.
+For each title, extract the core subject matter and return it as a single, three-word phrase.
+Return ONLY a comma-separated list of the three-word phrases.
+
+Titles:
+{title_list}
+
+Example: "Explosive new documents reveal a House Democrat received real-time coaching from convicted criminal Jeffrey Epstein..." -> Epstein Democrat coaching
+Example: "Senate passes $95 billion aid package for Ukraine and Israel" -> Foreign aid vote
+
+Comma-separated list of 3-word topics:"""
+        
+        # Use a reliable model for extraction
+        model_fallbacks = [model_name, "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+        resp = generate_with_model_fallback(prompt, model_fallbacks)
+        
+        topic_string = (resp.text or "").strip()
+        
+        # Process the comma-separated list
+        topics = [t.strip().lower() for t in topic_string.split(',') if t.strip()]
+        
+        print(f"  🧠 Past Topics: {topics}")
+        return topics
+        
+    except Exception as e:
+        print(f"  ⚠️ Error fetching or processing past topics: {e}")
+        return []
+
+def get_current_topic(article_text: str, model_name: str) -> str:
+    """Uses Gemini to extract a 3-word topic from the new article's text."""
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        return ""
+        
+    try:
+        genai.configure(api_key=key)
+        # Prompt to extract a 3-word phrase from the article text
+        prompt = f"""Analyze the following article text.
+Extract the core subject matter and return it as a single, three-word phrase suitable for comparison.
+Return ONLY the three-word phrase.
+
+Article text (first 500 characters): {article_text[:500]}
+
+Three-word topic:"""
+        
+        model_fallbacks = [model_name, "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+        resp = generate_with_model_fallback(prompt, model_fallbacks)
+        
+        topic = (resp.text or "").strip().lower()
+        print(f"  🧠 New Article Topic: {topic}")
+        return topic
+    except Exception as e:
+        print(f"  ⚠️ Error generating current topic: {e}")
+        return ""
+
+def is_topic_duplicate(new_topic: str, past_topics: List[str], similarity_threshold: int = 2) -> bool:
+    """Checks if the new topic is a near match to any past topic (based on word overlap)."""
+    if not new_topic:
+        return False
+
+    new_words = set(new_topic.split())
+    for past_topic in past_topics:
+        past_words = set(past_topic.split())
+        
+        # Check for shared words
+        overlap = len(new_words.intersection(past_words))
+        
+        # If the topics share a certain number of words, consider it a match
+        if overlap >= similarity_threshold:
+            print(f"  ❌ DUPLICATE DETECTED: New topic '{new_topic}' overlaps with past topic '{past_topic}' ({overlap} words).")
+            return True
+            
+    return False
+
 # ========================= Gemini =========================
 
 # --- THIS IS THE ONLY SYSTEM PROMPT NOW ---
@@ -512,37 +622,20 @@ def main():
     ap.add_argument("--min-words", type=int, default=10, help="Min words per sentence (combine shorter ones)")
     
     # --- THIS IS THE FIX ---
-    ap.add_argument("--model", default="gemini-2.0-flash", help="Gemini model") # <-- FIXED DEFAULT
+    ap.add_argument("--model", default="gemini-2.5-flash", help="Gemini model") # <-- FIXED DEFAULT to 2.5-flash
     # -----------------------
 
     args = ap.parse_args()
     sheet_key, _, _ = load_env_or_die()
 
-    # Auto-pick article (NewsData.io via news_picker)
-    title = args.story_title
-    url = args.story_url
-    if args.auto:
-        if news_picker is None:
-            sys.exit("news_picker.py not found. Add it next to this script or disable --auto.")
-        picked = news_picker.pick_top_story(
-            country=args.country, category=args.topic, query=(args.query or None)
-        )
-        if not picked:
-            sys.exit("Could not pick a top story. Check NEWSDATA_API_KEY or adjust --country/--topic/--query.")
-        url, title, published_at, score = picked
-        print(f"[auto] Picked: {title} ({url}) score={score:.3f} published={published_at.isoformat()}Z")
-        save_article_data(url, title) # This was already in your new file, which is great
-
-    if not url:
-        sys.exit("No story URL provided. Use --auto or pass --story_url.")
-    
     # --- ENSURE 'generated' FOLDER EXISTS ---
-    # This is run by the workflow, but good to have here too
     os.makedirs("generated", exist_ok=True) 
     # ----------------------------------------
-
-    # Open sheet & ensure tabs
+    
+    # Open sheet here to read past runs
     sh = open_sheet(sheet_key)
+    
+    # Open sheet & ensure tabs
     titles = {ws.title for ws in sh.worksheets()}
     for tab in ("Questions", "Runs", "AnswerSegments"):
         if tab not in titles:
@@ -551,12 +644,88 @@ def main():
     if not questions:
         sys.exit("No active questions in Questions tab (enabled != TRUE).")
 
-    # Get article text
-    if args.article_text:
-        article = args.article_text[:12000]
-        print("article: override text")
-    else:
+    # --- NEW: Get Past Topics for Deduplication ---
+    # Read past topics (Gemini will generate topic phrases)
+    past_topics = get_past_topics(sh, num_past=3, model_name=args.model)
+    # ---------------------------------------------
+    
+    # ====================================================================
+    # --- NEW: Deduplication Loop ---
+    # ====================================================================
+    
+    url = args.story_url
+    title = args.story_title
+    article = args.article_text
+    max_pick_attempts = 10
+    published_at = None
+    score = 0.0
+    
+    if args.auto:
+        if news_picker is None:
+            sys.exit("news_picker.py not found. Add it next to this script or disable --auto.")
+            
+        for attempt in range(max_pick_attempts):
+            print(f"\n[auto] Attempting to pick top story (Attempt {attempt + 1}/{max_pick_attempts})...")
+            
+            # 1. Pick the next most popular article
+            picked = news_picker.pick_top_story(
+                country=args.country, category=args.topic, query=(args.query or None),
+                # news_picker will skip URLs already saved to a .used.txt file
+            )
+            
+            if not picked:
+                # If we get nothing, try next run, but don't error out on the first try
+                if attempt == 0:
+                     sys.exit("Could not pick a top story on the first attempt. Check API key or adjust criteria.")
+                # We reached the end of all possible stories.
+                print("⚠️ No new top stories found.")
+                break 
+
+            url, title, published_at, score = picked
+            
+            # 2. Get article text for topic extraction
+            article = fetch_article_text(url)
+            
+            # If fetch failed, treat as duplicate and continue
+            if article.startswith("(Fetch failed"):
+                print(f"❌ Failed to fetch article text for {url}. Skipping.")
+                news_picker.mark_url_as_used(url) # Mark bad URL as used so we don't try again
+                time.sleep(1) 
+                continue 
+            
+            # 3. Use AI to check for topic duplication
+            if past_topics:
+                current_topic = get_current_topic(article, args.model)
+                if is_topic_duplicate(current_topic, past_topics, similarity_threshold=2):
+                    print(f"❌ Story topic '{current_topic}' is too similar to past topics. Skipping.")
+                    news_picker.mark_url_as_used(url) # Mark as used so pick_top_story skips it next time
+                    time.sleep(1) 
+                    continue # Go to the next attempt
+            
+            # If we reach here, the article is unique (or no past topics to check)
+            print(f"✅ Picked unique story: {title} ({url}) score={score:.3f}")
+            save_article_data(url, title)
+            news_picker.mark_url_as_used(url) # Mark as used now that we're going to process it
+            break # Exit the loop, we found our story
+        else:
+            sys.exit(f"Could not find a unique article after {max_pick_attempts} attempts.")
+    
+    # Check if a story was successfully picked (manual mode will skip the loop)
+    if not url:
+        sys.exit("No story URL provided. Use --auto or pass --story_url.")
+        
+    if not article and not args.article_text:
+        # This will re-fetch the article if the loop didn't run (manual mode)
         article = fetch_article_text(url)
+    
+    # If fetch failed, exit before running Gemini
+    if article.startswith("(Fetch failed"):
+        sys.exit(f"Could not retrieve article text for {url}.")
+
+    # ====================================================================
+    # --- END Deduplication Loop ---
+    # ====================================================================
+
 
     # Generate answers -> sentences -> rows
     run_id = now_run_id()
@@ -591,7 +760,7 @@ def main():
     try:
         ws_runs = _with_retry(lambda: sh.worksheet("Runs"))
         _with_retry(lambda: ws_runs.append_rows([[
-            run_id, url, title or "", dt.datetime.utcnow().isoformat() + "Z", 0.0
+            run_id, url, title or "", dt.datetime.utcnow().isoformat() + "Z", score
         ]], value_input_option="RAW"))
     except Exception:
         pass
