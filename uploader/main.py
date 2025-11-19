@@ -6,6 +6,7 @@ import tempfile
 import traceback
 import logging
 from typing import Dict, Any, List, Tuple, Optional
+import re # <<< ADDED IMPORT HERE
 
 import requests 
 
@@ -235,6 +236,7 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
     fb_image_caption = description
     
     # --- This is the text for Video Posts (unchanged) ---
+    # NOTE: This variable is used for both FB video and Make.com/TikTok
     fb_video_description = f"{title}\n\n{description}"
 
 
@@ -275,7 +277,8 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
             print("[youtube] done")
 
             print(f"Uploading to Facebook (Video): {local_media_path}")
-            _upload_facebook_video(local_media_path, title, fb_video_description)
+            # The sanitized title and description will be handled inside the function
+            _upload_facebook_video(local_media_path, title, fb_video_description) 
             print("[facebook] done")
         
         # --- NEW: Trigger Make.com ONLY if a video was posted to YouTube ---
@@ -367,8 +370,20 @@ def _upload_youtube(local_filename: str, title: str, description: str, tags: lis
         raise 
 
 def _upload_facebook_video(local_filename: str, title: str, description: str):
-    """Uploads a VIDEO to Facebook from a local file path."""
+    """
+    Uploads a VIDEO to Facebook from a local file path.
+    Includes sanitization to prevent 400 Bad Request errors.
+    """
     logger.info("[facebook] Starting Facebook VIDEO upload...")
+    
+    # --- SANITIZATION STEP ---
+    # Keep only standard text, numbers, basic punctuation, and Latin characters.
+    # This prevents errors from emojis, special Unicode symbols, or malformed characters.
+    sanitized_title = re.sub(r'[^\w\s\-\.\,\!\?\(\)\&\/\:\;]+', '', title).strip() 
+    sanitized_description = re.sub(r'[^\w\s\-\.\,\!\?\(\)\&\/\:\;]+', '', description).strip()
+    
+    logger.info(f"[facebook] Posting with sanitized title: {sanitized_title[:50]}...")
+    # --- END SANITIZATION ---
     
     page_token = _get_secret("FACEBOOK_PAGE_TOKEN")
     page_id = _get_secret("FB_PAGE_ID")
@@ -381,8 +396,8 @@ def _upload_facebook_video(local_filename: str, title: str, description: str):
     
     params = {
         "access_token": page_token,
-        "description": description,
-        "title": title
+        "description": sanitized_description, # <<< Use sanitized description
+        "title": sanitized_title             # <<< Use sanitized title
     }
 
     try:
@@ -398,6 +413,7 @@ def _upload_facebook_video(local_filename: str, title: str, description: str):
             logger.info(f"[facebook] Video upload successful! Video ID: {response_data['id']}")
         else:
             logger.error(f"[facebook] Video upload failed. Status: {response.status_code}, Response: {response_data}")
+            # Raise exception with the detailed API response
             raise Exception(f"Facebook video upload failed: {response_data}")
 
     except Exception as e:
@@ -417,9 +433,12 @@ def _upload_facebook_image(local_filename: str, caption: str):
 
     url = f"https://graph.facebook.com/v20.0/{page_id}/photos"
     
+    # Sanitization for image caption
+    sanitized_caption = re.sub(r'[^\w\s\-\.\,\!\?\(\)\&\/\:\;]+', '', caption).strip() 
+    
     params = {
         "access_token": page_token,
-        "caption": caption,
+        "caption": sanitized_caption, # <<< Use sanitized caption
     }
 
     try:
