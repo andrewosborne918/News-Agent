@@ -6,7 +6,8 @@ import tempfile
 import traceback
 import logging
 from typing import Dict, Any, List, Tuple, Optional
-import re # <<< ADDED IMPORT HERE
+import re
+import datetime # <<< ADDED for Signed URL expiration
 
 import requests 
 
@@ -163,10 +164,29 @@ def _load_json(bucket_name: str, json_blob_name: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-# --- NEW FUNCTION FOR MAKE.COM - NOW TAKES ANY URL ---
-def _trigger_make_tiktok_scenario(video_url: str, description: str):
+# --- NEW: Helper to generate Signed URL ---
+def _generate_signed_url(bucket_name: str, blob_name: str) -> str:
+    """Generates a V4 Signed URL valid for 1 hour to allow Make.com to download the video."""
+    try:
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        
+        # Requires 'Service Account Token Creator' role on the Service Account
+        url = blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(minutes=60), # 60 minutes validity
+            method="GET",
+        )
+        return url
+    except Exception as e:
+        logger.error(f"[gcs] Failed to generate signed URL: {e}")
+        raise
+
+# --- UPDATED: Send Signed URL + Metadata to Make ---
+def _trigger_make_tiktok_scenario(video_url: str, description: str, title: str):
     """
-    Sends the video URL (now a public YouTube URL) and description to a Make.com webhook.
+    Sends the GCS Signed URL and metadata to Make.com.
     """
     logger.info("[make] Attempting to trigger Make.com scenario...")
     
@@ -176,33 +196,27 @@ def _trigger_make_tiktok_scenario(video_url: str, description: str):
         return
 
     payload = {
-        # video_url is now a public YouTube link instead of GCS URI
-        "video_url": video_url, 
+        "video_url": video_url,  # This is the direct file link (Signed URL)
         "caption": description,
+        "title": title
     }
 
     try:
         response = requests.post(
             webhook_url, 
             json=payload, 
-            timeout=10 # Short timeout, as this is a non-critical side effect
+            timeout=15 
         )
-        
-        # Raise HTTPError for bad responses (4xx or 5xx)
         response.raise_for_status() 
-        
-        logger.info(f"[make] Webhook successfully triggered. Status: {response.status_code}. Response: {response.text}")
-
+        logger.info(f"[make] Webhook successfully triggered. Status: {response.status_code}.")
     except requests.exceptions.RequestException as e:
-        # Log the failure but don't re-raise, as YouTube/FB already succeeded.
         logger.error(f"[make] Failed to trigger Make.com webhook: {e}")
-# --- END NEW FUNCTION ---
 
 
 def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, int]:
     """
-    Reads companion JSON, determines post type (video or image),
-    generates captions, and kicks off publishing.
+    Reads companion JSON, determines post type, generates captions, 
+    triggers Make.com (for TikTok), then uploads to YouTube and Facebook.
     """
     print("Processor invoked")
     print("============================================================")
@@ -217,35 +231,26 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         _create_post_marker(bucket_name, json_blob_name, ".failed", f"Failed to load JSON: {e}")
         return ("failed to load metadata", 200) 
 
-    # --- NEW: Determine Post Type ---
-    post_type = meta.get("post_type", "video") # Default to 'video' for backwards compatibility
+    # --- Determine Post Type ---
+    post_type = meta.get("post_type", "video") 
     base_no_ext = os.path.splitext(json_blob_name)[0]
     
     # Use get_title_description_tags for robust AI-powered caption generation
     try:
         title, description, tags = get_title_description_tags(meta)
-        
         logger.info("[caption] Successfully generated captions.")
-        logger.info(f"[caption] Title: {title}")
     except Exception as e:
         logger.exception("ERROR: get_title_description_tags failed: %s", e)
         _create_post_marker(bucket_name, json_blob_name, ".failed", f"Failed to generate captions: {e}")
         return ("failed to generate captions", 200)
 
-    # --- This is the new text for the Facebook Image Post ---
     fb_image_caption = description
-    
-    # --- This is the text for Video Posts (unchanged) ---
-    # NOTE: This variable is used for both FB video and Make.com/TikTok
     fb_video_description = f"{title}\n\n{description}"
-
 
     local_media_path = None
     try:
-        youtube_video_id = None # Initialize variable to hold the YouTube ID
-
         if post_type == "image":
-            # Image posting logic remains the same
+            # ... (Image logic remains the same) ...
             media_blob_name = None
             client = storage.Client()
             bucket = client.bucket(bucket_name)
@@ -259,37 +264,40 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
             if not media_blob_name:
                 raise FileNotFoundError(f"Could not find matching image for {json_blob_name}")
             
-            print(f"  Image candidate: {media_blob_name}")
             local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
-            
             print(f"Uploading to Facebook (Image): {local_media_path}")
             _upload_facebook_image(local_media_path, fb_image_caption)
             print("[facebook] done")
+
         else: # Video processing
             media_blob_name = base_no_ext + ".mp4"
             print(f"  Video candidate: {media_blob_name}")
+
+            # --- STEP 1: TRIGGER MAKE.COM (TIKTOK) FIRST ---
+            # We do this BEFORE downloading/uploading to YouTube/Facebook.
+            # This uses a Signed URL so Make/Buffer can download the file directly.
+            try:
+                print("[make] Generating signed URL for Make.com...")
+                signed_url = _generate_signed_url(bucket_name, media_blob_name)
+                print(f"[make] Triggering webhook...")
+                _trigger_make_tiktok_scenario(signed_url, fb_video_description, title)
+                print("[make] done")
+            except Exception as make_e:
+                print(f"[make] WARNING: Failed to trigger TikTok flow: {make_e}")
+                # We continue execution so YouTube/FB still happen even if Make fails
             
+            # --- STEP 2: DOWNLOAD FOR YOUTUBE/FB ---
             local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
             
+            # --- STEP 3: UPLOAD TO YOUTUBE ---
             print(f"Uploading to YouTube (Video): {local_media_path}")
-            # --- MODIFIED: Capture the returned video ID ---
-            youtube_video_id = _upload_youtube(local_media_path, title, description, tags)
+            _upload_youtube(local_media_path, title, description, tags)
             print("[youtube] done")
 
+            # --- STEP 4: UPLOAD TO FACEBOOK ---
             print(f"Uploading to Facebook (Video): {local_media_path}")
-            # The sanitized title and description will be handled inside the function
             _upload_facebook_video(local_media_path, title, fb_video_description) 
             print("[facebook] done")
-        
-        # --- NEW: Trigger Make.com ONLY if a video was posted to YouTube ---
-        if youtube_video_id:
-            # Send the public YouTube URL to Make.com
-            public_youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
-            print(f"Triggering Make.com for TikTok via Buffer with public URL: {public_youtube_url}")
-            _trigger_make_tiktok_scenario(public_youtube_url, fb_video_description)
-            print("[make] done")
-        
-        # --- END NEW LOGIC ---
         
         _create_post_marker(bucket_name, json_blob_name, ".posted", "Success")
         
@@ -363,7 +371,7 @@ def _upload_youtube(local_filename: str, title: str, description: str, tags: lis
                 raise
 
         logger.info(f"[youtube] Upload successful! Video ID: {response['id']}")
-        return response['id'] # <<< RETURNS THE VIDEO ID
+        return response['id'] 
 
     except Exception as e:
         logger.exception(f"[youtube] Failed to upload: {e}")
@@ -377,8 +385,6 @@ def _upload_facebook_video(local_filename: str, title: str, description: str):
     logger.info("[facebook] Starting Facebook VIDEO upload...")
     
     # --- SANITIZATION STEP ---
-    # Keep only standard text, numbers, basic punctuation, and Latin characters.
-    # This prevents errors from emojis, special Unicode symbols, or malformed characters.
     sanitized_title = re.sub(r'[^\w\s\-\.\,\!\?\(\)\&\/\:\;]+', '', title).strip() 
     sanitized_description = re.sub(r'[^\w\s\-\.\,\!\?\(\)\&\/\:\;]+', '', description).strip()
     
@@ -396,8 +402,8 @@ def _upload_facebook_video(local_filename: str, title: str, description: str):
     
     params = {
         "access_token": page_token,
-        "description": sanitized_description, # <<< Use sanitized description
-        "title": sanitized_title             # <<< Use sanitized title
+        "description": sanitized_description, 
+        "title": sanitized_title             
     }
 
     try:
@@ -413,7 +419,6 @@ def _upload_facebook_video(local_filename: str, title: str, description: str):
             logger.info(f"[facebook] Video upload successful! Video ID: {response_data['id']}")
         else:
             logger.error(f"[facebook] Video upload failed. Status: {response.status_code}, Response: {response_data}")
-            # Raise exception with the detailed API response
             raise Exception(f"Facebook video upload failed: {response_data}")
 
     except Exception as e:
@@ -438,13 +443,12 @@ def _upload_facebook_image(local_filename: str, caption: str):
     
     params = {
         "access_token": page_token,
-        "caption": sanitized_caption, # <<< Use sanitized caption
+        "caption": sanitized_caption, 
     }
 
     try:
         with open(local_filename, 'rb') as f:
             files = {
-                # Use a generic 'image/jpeg' which works for png too
                 'source': (os.path.basename(local_filename), f, 'image/jpeg')
             }
             response = requests.post(url, params=params, files=files, timeout=300) 
