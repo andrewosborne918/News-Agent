@@ -139,20 +139,30 @@ jobs:
 
       - name: Upload video to Google Cloud Storage
         run: |
-          # Copy final video to generated folder with timestamp
+          # Copy final video and thumbnail to generated folder with timestamp
           TIMESTAMP=$(cat generated/.timestamp)
           cp output/final.mp4 generated/news_video_${TIMESTAMP}.mp4
           
+          # NEW: Prepare the thumbnail (using the first slide)
+          if [ -f generated/0001.jpg ]; then
+            cp generated/0001.jpg generated/news_video_${TIMESTAMP}.jpg
+          fi
+          
           # Upload to GCS (triggers Cloud Function automatically)
-          # Use gcloud storage (recommended with github-actions/auth) instead of gsutil
+          # 1. Upload Video
           gcloud storage cp generated/news_video_${TIMESTAMP}.mp4 gs://${{ secrets.GCS_BUCKET }}/incoming/
-          # Upload companion metadata JSON if present
+          
+          # 2. Upload Thumbnail (NEW)
+          if [ -f generated/news_video_${TIMESTAMP}.jpg ]; then
+            gcloud storage cp generated/news_video_${TIMESTAMP}.jpg gs://${{ secrets.GCS_BUCKET }}/incoming/
+          fi
+          
+          # 3. Upload Metadata JSON (This triggers the function last)
           if [ -f generated/news_video_${TIMESTAMP}.json ]; then
             gcloud storage cp generated/news_video_${TIMESTAMP}.json gs://${{ secrets.GCS_BUCKET }}/incoming/
           fi
           
-          echo "✅ Video uploaded to GCS - Cloud Function will handle posting"
-          echo "Video: gs://${{ secrets.GCS_BUCKET }}/incoming/news_video_${TIMESTAMP}.mp4"
+          echo "✅ Video and assets uploaded to GCS"
 
       - name: Upload video artifact (backup)
         uses: actions/upload-artifact@v4
