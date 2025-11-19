@@ -365,7 +365,7 @@ def append_rows_safe(ws, rows: List[List], batch_size: int = 100):
 
 # ========================= AI Deduplication =========================
 
-def get_past_topics(sh: gspread.models.Spreadsheet, num_past: int = 3, model_name: str = "gemini-2.5-flash") -> List[str]:
+def get_past_topics(sh, num_past: int = 3, model_name: str = "gemini-2.5-flash") -> List[str]:
     """
     Reads the last 'num_past' story titles from the Runs tab and uses Gemini
     to generate a 3-word topic for each.
