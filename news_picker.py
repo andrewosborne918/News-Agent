@@ -1,3 +1,24 @@
+# --- Used URLs Management ---
+def get_used_urls():
+    """Read used URLs from .used.txt file."""
+    used = set()
+    try:
+        with open(".used.txt", "r", encoding="utf-8") as f:
+            for line in f:
+                url = line.strip()
+                if url:
+                    used.add(url)
+    except FileNotFoundError:
+        pass
+    return used
+
+def mark_url_as_used(url: str):
+    """Saves the URL to a local file to prevent re-picking."""
+    try:
+        with open(".used.txt", "a", encoding="utf-8") as f:
+            f.write(url.strip() + "\n")
+    except Exception as e:
+        print(f"⚠️ Failed to mark URL as used: {e}")
 # news_picker.py
 """
 NewsData.io integration for auto-picking top stories.
@@ -66,25 +87,22 @@ def pick_top_story(country="us", category="politics", query=None):
     print(f"📰 Found {len(articles)} articles from NewsData.io (from target sources)")
 
     # --- Double-check filter (good practice) ---
+    used_urls = get_used_urls()
     filtered_articles = []
     for a in articles:
         link = a.get("link") or ""
-        if not link:
+        if not link or link in used_urls:
             continue
-        
         try:
-            # Get the domain (e.g., "www.foxnews.com" -> "foxnews.com")
             domain = urlparse(link).netloc
             if domain.startswith("www."):
                 domain = domain[4:]
-            
             if domain in TARGET_SOURCES:
                 filtered_articles.append(a)
         except Exception:
             continue # Skip malformed URLs
-    
     if not filtered_articles:
-        print(f"⚠️ API returned articles, but none passed secondary domain validation for: {TARGET_SOURCES}")
+        print(f"⚠️ API returned articles, but none passed secondary domain validation for: {TARGET_SOURCES} or were already used.")
         return None
     # -------------------------------------------
 
