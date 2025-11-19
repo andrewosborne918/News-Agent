@@ -1,4 +1,4 @@
-# main.py
+# uploader/main.py
 from caption_utils import get_title_description_tags
 import os
 import json
@@ -7,21 +7,16 @@ import traceback
 import logging
 from typing import Dict, Any, List, Tuple, Optional
 import re
-import datetime # <<< ADDED for Signed URL expiration
-
+import datetime 
 import requests 
 
 from google.cloud import storage, secretmanager
 from google.api_core.exceptions import NotFound, Conflict, PreconditionFailed
-
-# --- NEW IMPORTS FOR YOUTUBE ---
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, ResumableUploadError
 from google.auth.transport import requests as google_auth_requests
-# -------------------------------
-
 import functions_framework
 
 _SECRET_CACHE: Dict[str, str] = {}
@@ -31,7 +26,6 @@ PROJECT_ID = os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJE
 
 
 def _get_secret(secret_name: str) -> Optional[str]:
-    """Fetch a secret from Secret Manager (cached). Returns None if unavailable."""
     global _SECRET_CACHE
     if secret_name in _SECRET_CACHE:
         return _SECRET_CACHE[secret_name]
@@ -70,33 +64,27 @@ def gcs_to_social(event):
         print(f"skip: not an incoming metadata JSON -> bucket={bucket} name={name}")
         return
 
-    # 1. Check if job is already done (Idempotency)
     if _marker_exists(bucket, name, ".posted"):
         print(f"skip: already posted (marker file exists) -> {name}")
         return
-        
     if _marker_exists(bucket, name, ".failed"):
         print(f"skip: already failed (marker file exists) -> {name}")
         return
 
-    # 2. Check if job is currently running (Locking)
     if _marker_exists(bucket, name, ".processing"):
         print(f"skip: currently processing (lock file exists) -> {name}")
         return
 
-    # 3. Set Lock
     _create_post_marker(bucket, name, ".processing", "Processing started")
 
     try:
         msg, _status = _process_metadata_json(bucket, name)
         print(msg)
     finally:
-        # 4. Release Lock (Always cleanup the .processing file)
         _delete_marker(bucket, name, ".processing")
 
 
 def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
-    """Download gs://bucket/blob to a local temp file and return the local path."""
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(blob_name)
@@ -108,7 +96,6 @@ def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
 
 
 def _marker_exists(bucket_name: str, json_blob_name: str, suffix: str) -> bool:
-    """Check if a marker file like <base>.posted or <base>.failed exists."""
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     base_no_ext = os.path.splitext(json_blob_name)[0]
@@ -118,7 +105,6 @@ def _marker_exists(bucket_name: str, json_blob_name: str, suffix: str) -> bool:
 
 
 def _create_post_marker(bucket_name: str, json_blob_name: str, suffix: str, content: str = ""):
-    """Create an idempotency marker <base>.posted, <base>.failed, or <base>.processing."""
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     base_no_ext = os.path.splitext(json_blob_name)[0]
@@ -134,7 +120,6 @@ def _create_post_marker(bucket_name: str, json_blob_name: str, suffix: str, cont
         print(f"[marker] ERROR: failed to create marker {marker_key}: {e}")
 
 def _delete_marker(bucket_name: str, json_blob_name: str, suffix: str):
-    """Delete a marker file (used for cleaning up .processing lock)."""
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     base_no_ext = os.path.splitext(json_blob_name)[0]
@@ -148,7 +133,6 @@ def _delete_marker(bucket_name: str, json_blob_name: str, suffix: str):
         print(f"[marker] warning: failed to delete marker {marker_key}: {e}")
 
 def _load_json(bucket_name: str, json_blob_name: str) -> Dict[str, Any]:
-    """Download and parse a companion JSON from GCS."""
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(json_blob_name)
@@ -164,18 +148,15 @@ def _load_json(bucket_name: str, json_blob_name: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-# --- NEW: Helper to generate Signed URL ---
 def _generate_signed_url(bucket_name: str, blob_name: str) -> str:
-    """Generates a V4 Signed URL valid for 1 hour to allow Make.com to download the video."""
+    """Generates a V4 Signed URL valid for 60 minutes."""
     try:
         client = storage.Client()
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_name)
-        
-        # Requires 'Service Account Token Creator' role on the Service Account
         url = blob.generate_signed_url(
             version="v4",
-            expiration=datetime.timedelta(minutes=60), # 60 minutes validity
+            expiration=datetime.timedelta(minutes=60),
             method="GET",
         )
         return url
@@ -183,99 +164,115 @@ def _generate_signed_url(bucket_name: str, blob_name: str) -> str:
         logger.error(f"[gcs] Failed to generate signed URL: {e}")
         raise
 
-# --- UPDATED FUNCTION: Now accepts thumbnail_url ---
 def _trigger_make_tiktok_scenario(video_url: str, thumbnail_url: str, description: str, title: str):
     """
-    Sends the GCS Signed URLs (video + thumbnail) and metadata to Make.com.
+    Sends the GCS Signed URLs and metadata to Make.com.
     """
     logger.info("[make] Attempting to trigger Make.com scenario...")
-    
     webhook_url = _get_secret("MAKE_WEBHOOK_URL")
+    
+    # 🔴 NEW LOG: Check the URL value immediately before use
+    logger.info(f"DEBUG: [make] Retrieved Webhook URL (starts): {webhook_url[:10]}...")
+    
     if not webhook_url:
-        logger.warning("[make] MAKE_WEBHOOK_URL secret is missing. Skipping Make.com trigger.")
-        return
+        logger.error("❌ [make] MAKE_WEBHOOK_URL is EMPTY. Cannot proceed.")
+        raise ValueError("MAKE_WEBHOOK_URL is missing or empty.") # Raise error if empty
 
     payload = {
         "video_url": video_url,
-        "thumbnail_url": thumbnail_url, # <--- NEW FIELD
+        "thumbnail_url": thumbnail_url,
         "caption": description,
         "title": title
     }
 
     try:
         response = requests.post(
-            webhook_url, 
-            json=payload, 
-            timeout=15 
+            webhook_url,
+            json=payload,
+            timeout=15
         )
-        response.raise_for_status() 
-        logger.info(f"[make] Webhook successfully triggered. Status: {response.status_code}.")
+        response.raise_for_status()
+        
+        # 🟢 NEW LOG: Log successful trigger status
+        logger.info(f"✅ [make] Webhook triggered. Status: {response.status_code}. Response: {response.text[:100]}...")
+        
     except requests.exceptions.RequestException as e:
-        logger.error(f"[make] Failed to trigger Make.com webhook: {e}")
+        # 🔴 NEW LOG: Log the specific error, including network or schema failure
+        logger.error(f"❌ [make] Webhook CRASHED. Error Type: {type(e).__name__}. Message: {e}")
+        # Re-raise the exception to ensure the Cloud Function execution is flagged as failed
+        raise e
 
 
-# --- UPDATED PROCESSOR ---
 def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, int]:
     print("Processor invoked")
     print(f"Bucket: {bucket_name} | JSON: {json_blob_name}")
 
-    # Load JSON
     try:
         meta = _load_json(bucket_name, json_blob_name)
     except Exception as e:
         _create_post_marker(bucket_name, json_blob_name, ".failed", f"Failed to load JSON: {e}")
-        return ("failed to load metadata", 200) 
+        return ("failed to load metadata", 200)
 
-    # Generate Captions
     try:
         title, description, tags = get_title_description_tags(meta)
+        logger.info("[caption] Successfully generated captions.")
     except Exception as e:
         _create_post_marker(bucket_name, json_blob_name, ".failed", f"Failed to generate captions: {e}")
         return ("failed to generate captions", 200)
 
-    post_type = meta.get("post_type", "video") 
+    post_type = meta.get("post_type", "video")
     base_no_ext = os.path.splitext(json_blob_name)[0]
     fb_video_description = f"{title}\n\n{description}"
-    
     local_media_path = None
     try:
         if post_type == "image":
-            # ... (Image logic remains unchanged) ...
-            pass 
+            media_blob_name = None
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+                potential_name = f"{base_no_ext}{ext}"
+                if bucket.blob(potential_name).exists():
+                    media_blob_name = potential_name
+                    break
+            if not media_blob_name:
+                raise FileNotFoundError(f"Could not find matching image for {json_blob_name}")
+            local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
+            print(f"Uploading to Facebook (Image): {local_media_path}")
+            _upload_facebook_image(local_media_path, fb_image_caption)
+            print("[facebook] done")
 
         else: # Video processing
             media_blob_name = base_no_ext + ".mp4"
-            thumbnail_blob_name = base_no_ext + ".jpg" # <--- Look for matching JPG
-            
-            print(f"  Video: {media_blob_name}")
+            thumbnail_blob_name = base_no_ext + ".jpg"
+            print(f"  Video candidate: {media_blob_name}")
 
-            # --- STEP 1: TRIGGER MAKE.COM (TIKTOK) ---
+            # --- STEP 1: GENERATE SIGNED URLs AND TRIGGER MAKE.COM ---
+            print("[make] Generating signed URL for Make.com...")
+            signed_url = _generate_signed_url(bucket_name, media_blob_name)
+            thumb_signed_url = ""
             try:
-                print("[make] Generating signed URLs...")
-                video_signed_url = _generate_signed_url(bucket_name, media_blob_name)
-                
-                # Try to sign thumbnail if it exists
-                thumbnail_signed_url = ""
-                try:
-                    thumbnail_signed_url = _generate_signed_url(bucket_name, thumbnail_blob_name)
-                    print("[make] Thumbnail signed successfully.")
-                except Exception:
-                    print("[make] No thumbnail found or failed to sign. Proceeding without it.")
+                thumb_signed_url = _generate_signed_url(bucket_name, thumbnail_blob_name)
+            except Exception:
+                print("[make] WARNING: No thumbnail found or failed to sign.")
 
-                print(f"[make] Triggering webhook...")
-                # Pass the thumbnail URL to the function
-                _trigger_make_tiktok_scenario(video_signed_url, thumbnail_signed_url, fb_video_description, title)
-                print("[make] done")
-            except Exception as make_e:
-                print(f"[make] WARNING: Failed to trigger TikTok flow: {make_e}")
-            
-            # --- STEP 2 & 3 (YouTube/Facebook) remain unchanged ---
+            print(f"[make] Triggering webhook...")
+            # Will now crash here if the webhook URL is missing/corrupted
+            _trigger_make_tiktok_scenario(signed_url, thumb_signed_url, fb_video_description, title)
+            print("[make] Make webhook complete.")
+
+            # --- STEP 2: DOWNLOAD FOR YOUTUBE/FB ---
             local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
-            print(f"Uploading to YouTube: {local_media_path}")
+            
+            # --- STEP 3: UPLOAD TO YOUTUBE ---
+            print(f"Uploading to YouTube (Video): {local_media_path}")
             _upload_youtube(local_media_path, title, description, tags)
-            print(f"Uploading to Facebook: {local_media_path}")
-            _upload_facebook_video(local_media_path, title, fb_video_description) 
+            print("[youtube] done")
 
+            # --- STEP 4: UPLOAD TO FACEBOOK ---
+            print(f"Uploading to Facebook (Video): {local_media_path}")
+            _upload_facebook_video(local_media_path, title, fb_video_description)
+            print("[facebook] done")
+        
         _create_post_marker(bucket_name, json_blob_name, ".posted", "Success")
         
     except Exception as e:
@@ -288,11 +285,9 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
     return (f"ok: processed {json_blob_name}", 200)
 
 def _upload_youtube(local_filename: str, title: str, description: str, tags: list[str] | None = None) -> str:
-    """Uploads a video to YouTube from a local file path. Returns the video ID."""
     logger.info("[youtube] Starting YouTube upload...")
     creds_json_str = _get_secret("YOUTUBE_CREDENTIALS_JSON")
     if not creds_json_str:
-        logger.error("[youtube] FATAL: YOUTUBE_CREDENTIALS_JSON secret is missing.")
         raise Exception("YOUTUBE_CREDENTIALS_JSON secret is missing.")
 
     try:
@@ -305,9 +300,7 @@ def _upload_youtube(local_filename: str, title: str, description: str, tags: lis
             client_secret=creds_data.get("client_secret"),
             scopes=["https://www.googleapis.com/auth/youtube.upload"]
         )
-        
         creds.refresh(google_auth_requests.Request())
-        
         youtube = build("youtube", "v3", credentials=creds)
         
         body = {
@@ -315,124 +308,81 @@ def _upload_youtube(local_filename: str, title: str, description: str, tags: lis
                 "title": title,
                 "description": description,
                 "tags": tags or ["news", "politics"],
-                "categoryId": "25" # 25 = News & Politics
+                "categoryId": "25"
             },
             "status": {
-                "privacyStatus": "public" # Set to public
+                "privacyStatus": "public"
             }
         }
-
         media = MediaFileUpload(local_filename, chunksize=-1, resumable=True)
-        
-        request = youtube.videos().insert(
-            part="snippet,status",
-            body=body,
-            media_body=media
-        )
+        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
         
         response = None
         while response is None:
-            try:
-                status, response = request.next_chunk()
-                if status:
-                    logger.info(f"[youtube] Uploaded {int(status.progress() * 100)}%")
-            except HttpError as e:
-                logger.error(f"[youtube] HTTP error: {e}")
-                raise
-            except ResumableUploadError as e:
-                logger.error(f"[youtube] Resumable upload error: {e}")
-                raise
-
-        logger.info(f"[youtube] Upload successful! Video ID: {response['id']}")
-        return response['id'] 
+            status, response = request.next_chunk()
+            if status:
+                logger.info(f"[youtube] Uploaded {int(status.progress() * 100)}%") # Add progress logging
+        
+        logger.info(f"[youtube] Upload successful! Video ID: {response['id']}") # Add success logging
+        return response['id']
 
     except Exception as e:
         logger.exception(f"[youtube] Failed to upload: {e}")
-        raise 
+        raise
 
 def _upload_facebook_video(local_filename: str, title: str, description: str):
-    """
-    Uploads a VIDEO to Facebook from a local file path.
-    Includes sanitization to prevent 400 Bad Request errors.
-    """
     logger.info("[facebook] Starting Facebook VIDEO upload...")
-    
-    # --- SANITIZATION STEP ---
-    sanitized_title = re.sub(r'[^\w\s\-\.\,\!\?\(\)\&\/\:\;]+', '', title).strip() 
+    sanitized_title = re.sub(r'[^\w\s\-\.\,\!\?\(\)\&\/\:\;]+', '', title).strip()
     sanitized_description = re.sub(r'[^\w\s\-\.\,\!\?\(\)\&\/\:\;]+', '', description).strip()
-    
-    logger.info(f"[facebook] Posting with sanitized title: {sanitized_title[:50]}...")
-    # --- END SANITIZATION ---
     
     page_token = _get_secret("FACEBOOK_PAGE_TOKEN")
     page_id = _get_secret("FB_PAGE_ID")
     
     if not page_token or not page_id:
-        logger.error("[facebook] FATAL: FACEBOOK_PAGE_TOKEN or FB_PAGE_ID secrets are missing.")
         raise Exception("FACEBOOK_PAGE_TOKEN or FB_PAGE_ID secrets are missing.")
 
     url = f"https://graph-video.facebook.com/v20.0/{page_id}/videos"
-    
-    params = {
-        "access_token": page_token,
-        "description": sanitized_description, 
-        "title": sanitized_title             
-    }
+    params = { "access_token": page_token, "description": sanitized_description, "title": sanitized_title }
 
     try:
         with open(local_filename, 'rb') as f:
-            files = {
-                'source': (os.path.basename(local_filename), f, 'video/mp4')
-            }
-            response = requests.post(url, params=params, files=files, timeout=900) 
-            
-        response_data = response.json()
+            files = {'source': (os.path.basename(local_filename), f, 'video/mp4')}
+            response = requests.post(url, params=params, files=files, timeout=900)
         
-        if response.status_code == 200 and "id" in response_data:
-            logger.info(f"[facebook] Video upload successful! Video ID: {response_data['id']}")
-        else:
-            logger.error(f"[facebook] Video upload failed. Status: {response.status_code}, Response: {response_data}")
+        response_data = response.json()
+        if response.status_code != 200 or "id" not in response_data:
+            logger.error(f"[facebook] Upload failed. Status: {response.status_code}, Response: {response_data}") # Add failure logging
             raise Exception(f"Facebook video upload failed: {response_data}")
 
+        logger.info(f"[facebook] Video upload successful! Video ID: {response_data['id']}") # Add success logging
+        
     except Exception as e:
         logger.exception(f"[facebook] Failed to upload video: {e}")
         raise
 
 def _upload_facebook_image(local_filename: str, caption: str):
-    """Uploads an IMAGE to Facebook from a local file path."""
     logger.info("[facebook] Starting Facebook IMAGE upload...")
-    
     page_token = _get_secret("FACEBOOK_PAGE_TOKEN")
     page_id = _get_secret("FB_PAGE_ID")
     
     if not page_token or not page_id:
-        logger.error("[facebook] FATAL: FACEBOOK_PAGE_TOKEN or FB_PAGE_ID secrets are missing.")
         raise Exception("FACEBOOK_PAGE_TOKEN or FB_PAGE_ID secrets are missing.")
 
     url = f"https://graph.facebook.com/v20.0/{page_id}/photos"
-    
-    # Sanitization for image caption
-    sanitized_caption = re.sub(r'[^\w\s\-\.\,\!\?\(\)\&\/\:\;]+', '', caption).strip() 
-    
-    params = {
-        "access_token": page_token,
-        "caption": sanitized_caption, 
-    }
+    sanitized_caption = re.sub(r'[^\w\s\-\.\,\!\?\(\)\&\/\:\;]+', '', caption).strip()
+    params = { "access_token": page_token, "caption": sanitized_caption }
 
     try:
         with open(local_filename, 'rb') as f:
-            files = {
-                'source': (os.path.basename(local_filename), f, 'image/jpeg')
-            }
-            response = requests.post(url, params=params, files=files, timeout=300) 
+            files = {'source': (os.path.basename(local_filename), f, 'image/jpeg')}
+            response = requests.post(url, params=params, files=files, timeout=300)
             
         response_data = response.json()
-        
-        if response.status_code == 200 and "id" in response_data:
-            logger.info(f"[facebook] Image post successful! Post ID: {response_data['id']}")
-        else:
-            logger.error(f"[facebook] Image post failed. Status: {response.status_code}, Response: {response_data}")
+        if response.status_code != 200 or "id" not in response_data:
+            logger.error(f"[facebook] Image post failed. Status: {response.status_code}, Response: {response_data}") # Add failure logging
             raise Exception(f"Facebook image post failed: {response_data}")
+
+        logger.info(f"[facebook] Image post successful! Post ID: {response_data['id']}") # Add success logging
 
     except Exception as e:
         logger.exception(f"[facebook] Failed to post image: {e}")
