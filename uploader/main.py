@@ -152,31 +152,9 @@ def _load_json(bucket_name: str, json_blob_name: str) -> Dict[str, Any]:
 
 
 def _generate_signed_url(bucket_name: str, blob_name: str) -> str:
-    """Generates a V4 Signed URL using the signing method that works with default credentials."""
-    logger.info(f"[gcs] Generating signed URL for {bucket_name}/{blob_name}")
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
-
-    if not blob.exists():
-        raise FileNotFoundError(f"Blob not found for signed URL: {bucket_name}/{blob_name}")
-
-    try:
-        # Use signing method that works with default service account
-        url = blob.generate_signed_url(
-            version="v4",
-            expiration=datetime.timedelta(minutes=60),
-            method="GET",
-            # Add this parameter to use the service account's signing capability
-            service_account_email="222876473651-compute@developer.gserviceaccount.com"
-        )
-        logger.info("[gcs] Signed URL generated successfully")
-        return url
-    except Exception as e:
-        logger.exception(f"[gcs] Failed to generate signed URL: {e}")
-        # Fallback: return a public URL if the blob is publicly accessible
-        logger.warning("[gcs] Attempting to use public URL as fallback")
-        return f"https://storage.googleapis.com/{bucket_name}/{blob_name}"
+    """Returns the public URL since the bucket is public."""
+    # Simple public URL structure
+    return f"https://storage.googleapis.com/{bucket_name}/{blob_name}"
 
 
 def _trigger_make_tiktok_scenario(video_url: str, thumbnail_url: str, description: str, title: str):
