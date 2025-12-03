@@ -54,14 +54,9 @@ jobs:
           # Model name
           MODEL_NAME: "gemini-2.5-flash"
           FALLBACK_MODEL_NAME: "gemini-2.0-flash"
-          
-          # --- ADDED NEW OAUTH SECRETS ---
-          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
-          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
-          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
         run: |
-          # Runs the script from its new location
           python social-posts/image_processor.py
+
           
       - name: Deploy Cloud Function (gcs-to-social)
         run: |

@@ -15,7 +15,7 @@ import google.generativeai as genai
 import google.auth.transport.requests # <-- ADDED
 from google.api_core.exceptions import ResourceExhausted, InternalServerError
 from google.cloud import storage 
-from google.oauth2.credentials import Credentials  # <-- CHANGED
+import google.auth
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from googleapiclient.errors import HttpError
@@ -32,11 +32,6 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-2.5-flash")
 FALLBACK_MODEL_NAME = os.environ.get("FALLBACK_MODEL_NAME", "gemini-2.0-flash")
 
 PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
-
-# --- OAuth Constants ---
-GDRIVE_CLIENT_ID = os.environ.get("GDRIVE_CLIENT_ID")
-GDRIVE_CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET")
-GDRIVE_REFRESH_TOKEN = os.environ.get("GDRIVE_REFRESH_TOKEN")
 
 # ---
 # This is your existing fallback function
@@ -94,32 +89,19 @@ def generate_with_fallback(prompt, primary_model_name, fallback_model_name):
 # --- This is the working OAuth function ---
 # ---
 def get_gdrive_service():
-    """Authenticates using user OAuth 2.0 credentials."""
-    print("🔐 Authenticating to Google Drive using OAuth 2.0 Refresh Token...")
-    SCOPES = ['https://www.googleapis.com/auth/drive']
-    
-    if not all([GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, GDRIVE_REFRESH_TOKEN]):
-        print("❌ Error: Missing one or more GDRIVE OAuth environment variables.")
-        sys.exit(1)
+    """Authenticates to Google Drive using the GitHub Action's service account (ADC)."""
+    print("🔐 Authenticating to Google Drive using service account (ADC)...")
+    SCOPES = ["https://www.googleapis.com/auth/drive"]
 
     try:
-        creds = Credentials(
-            None, # No access token, we'll get one with the refresh token
-            refresh_token=GDRIVE_REFRESH_TOKEN,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=GDRIVE_CLIENT_ID,
-            client_secret=GDRIVE_CLIENT_SECRET,
-            scopes=SCOPES
-        )
-        
-        # Refresh the token to get a valid access token
-        creds.refresh(google.auth.transport.requests.Request())
-        
-        service = build('drive', 'v3', credentials=creds)
-        print("✅ Google Drive service authenticated as user.")
+        # Uses credentials from google-github-actions/auth
+        creds, project = google.auth.default(scopes=SCOPES)
+
+        service = build("drive", "v3", credentials=creds)
+        print(f"✅ Google Drive service authenticated as service account (project={project}).")
         return service
     except Exception as e:
-        print(f"❌ Failed to authenticate with OAuth 2.0: {e}")
+        print(f"❌ Failed to authenticate with service account credentials: {e}")
         sys.exit(1)
 
 def get_first_image_from_drive(service) -> Optional[Dict[str, str]]:
