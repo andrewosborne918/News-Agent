@@ -696,7 +696,7 @@ def main():
             # 3. Use AI to check for topic duplication
             if past_topics:
                 current_topic = get_current_topic(article, args.model)
-                if is_topic_duplicate(current_topic, past_topics, similarity_threshold=2):
+                if is_topic_duplicate(current_topic, past_topics, similarity_threshold=1):
                     print(f"❌ Story topic '{current_topic}' is too similar to past topics. Skipping.")
                     news_picker.mark_url_as_used(url) # Mark as used so pick_top_story skips it next time
                     time.sleep(1) 

@@ -4,6 +4,7 @@ on:
   schedule:
     # Runs every hour from 6am to 10pm EST (11:00 UTC to 03:00 UTC)
     - cron: "0 0-3,11-23 * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
