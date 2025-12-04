@@ -246,66 +246,79 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         (
             "Support Our Work: Nothing says American pride like a high-quality flag flying strong in the wind. Upgrade yours today:",
             "https://amzn.to/4iyYMsk"
+            "--------------------------",
         ),
 
         (
             "Support Our Work: This 1776 shirt is bold, clean, and guaranteed to start conversations. Grab yours here:",
             "https://amzn.to/44MLNxu"
+            "--------------------------",
         ),
 
         (
             "Support Our Work: One of the most iconic moments in American history—perfect for any home or office wall. Check it out:",
             "https://amzn.to/4axsKLp"
+            "--------------------------",
         ),
 
         (
             "Support Our Work: Love America? Wear it proudly. This classic MAGA hat is a must-have:",
             "https://amzn.to/3KJ1P4N"
+            "--------------------------",
         ),
 
         (
             "Support Our Work: Every household needs emergency water filtration. These compact straws can literally save lives:",
             "https://amzn.to/4awHFW9"
+            "--------------------------",
         ),
 
         (
             "Support Our Work: Keep your devices alive anywhere—even when the grid goes down. This solar power bank is essential:",
             "https://amzn.to/3Kz1Lo3"
+            "--------------------------",
         ),
 
         (
-            "Support Our Work: Orwell’s '1984' is more relevant than ever. If you don’t own a copy, now’s the time:",
+            "Support Our Work: Orwell's '1984' is more relevant than ever. If you don't own a copy, now's the time:",
             "https://amzn.to/4oBB9AO"
+            "--------------------------",
         ),
 
         (
             "Support Our Work: Protect your eyes during long days on screens. These blue-light glasses make a big difference:",
             "https://amzn.to/443U2Fm"
+            "--------------------------",
         ),
 
         (
             "Support Our Work: Capture everything on the road—accidents, crazy drivers, and the unexpected. This dash cam is a must-have:",
             "https://amzn.to/3Mkpau4"
+            "--------------------------",
         ),
 
         (
             "Support Our Work: A simple privacy upgrade that everyone should have. These webcam covers keep your camera shut when you want it shut:",
             "https://amzn.to/44Ef2Tc"
+            "--------------------------",
         ),
 
         (
             "Support Our Work: Fuel up with veteran-owned, freedom-loving coffee. Black Rifle never misses:",
             "https://amzn.to/3KIiNAj"
+            "--------------------------",
         ),
 
         (
             "Support Our Work: Stop dealing with stuck-on food. These Cascade Platinum pods are the only dishwasher product I recommend:",
             "https://amzn.to/3KIiNAj"
+            "--------------------------",
         ),
 
         (
-            "Support Our Work: Ditch the woke razors and upgrade to Jeremy’s—built for men who value quality and grit:",
+            "Support Our Work: Ditch the woke razors and upgrade to Jeremy's—built for men who value quality and grit:",
             "https://amzn.to/4oTtGxr"
+            "--------------------------",
         ),
     ]
 
