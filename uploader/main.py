@@ -264,6 +264,10 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
         f"{amazon_disclosure}"
     )
 
+    print("DEBUG COMBINED DESCRIPTION START ----")
+    print(combined_description)
+    print("DEBUG COMBINED DESCRIPTION END ----")
+
     # Use this for both YouTube + Facebook
     description = combined_description         # YouTube description
     fb_video_description = combined_description  # Facebook caption
