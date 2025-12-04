@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, List
 import re
 import datetime
 import requests
+import hashlib
 
 from google.cloud import storage, secretmanager
 from google.api_core.exceptions import NotFound, Conflict, PreconditionFailed
@@ -213,8 +214,63 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
 
     post_type = meta.get("post_type", "video")
     base_no_ext = os.path.splitext(json_blob_name)[0]
-    fb_video_description = f"{title}\n\n{description}"
+
+    # --- AMAZON AFFILIATE ROTATOR ---
+
+    affiliate_items = [
+        (
+            "This book exposes the ENTIRE Democrat platform… in a way that will make you laugh out loud. Check it out here:",
+            "https://amzn.to/4pSOB4x",
+        ),
+        (
+            "If you have ever wanted a clear roadmap for living with strength and responsibility, this book is a must-read. Link:",
+            "https://amzn.to/4pg2ObA",
+        ),
+        (
+            "If you want to understand what global elites are planning behind closed doors, start here. Eye-opening read:",
+            "https://amzn.to/3Knhw1x",
+        ),
+        (
+            "One of my favorite patriotic designs — subtle, stylish, and bold. Grab it here:",
+            "https://amzn.to/3Km1AMZ",
+        ),
+        (
+            "A durable, beautiful Bible built to last a lifetime. Perfect for daily study. Link:",
+            "https://amzn.to/3K96Zac",
+        ),
+    ]
+
+    # Deterministic rotation per post (based on file name)
+    run_hash = int(hashlib.sha256(base_no_ext.encode("utf-8")).hexdigest(), 16)
+    hook, link = affiliate_items[run_hash % len(affiliate_items)]
+    affiliate_block = f"{hook} {link}"
+
+    # Required Amazon disclosure (must match exactly)
+    amazon_disclosure = (
+        "As an Amazon Associate I earn from qualifying purchases. "
+        "Using these links is a simple way to support our work "
+        "and help us continue producing conservative news content."
+    )
+
+    # Build final combined description:
+    # {{TITLE}}
+    # {{HOOK + LINK}}
+    # {{DESCRIPTION}}
+    # {{DISCLOSURE}}
+    combined_description = (
+        f"{title}\n\n"
+        f"{affiliate_block}\n\n"
+        f"{description}\n\n"
+        f"{amazon_disclosure}"
+    )
+
+    # Use this for both YouTube + Facebook
+    description = combined_description         # YouTube description
+    fb_video_description = combined_description  # Facebook caption
+
     local_media_path = None
+    # --- END AMAZON AFFILIATE ROTATOR ---
+
 
     try:
         if post_type == "image":
