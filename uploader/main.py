@@ -295,7 +295,7 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
 
         (
             "Support Our Work: Stop dealing with stuck-on food. These Cascade Platinum pods are the only dishwasher product I recommend:",
-            "https://amzn.to/3KIiNAj",
+            "https://amzn.to/4oBZXIW",
         ),
 
         (
