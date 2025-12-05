@@ -359,36 +359,23 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
             _upload_facebook_image(local_media_path, fb_image_caption)
             print("[facebook] done")
 
-        else:  # Video processing
-            media_blob_name = base_no_ext + ".mp4"
-            thumbnail_blob_name = base_no_ext + ".jpg"
-            print(f"  Video candidate: {media_blob_name}")
+            else:  # Video processing (YouTube + Facebook only, no TikTok/Make)
+                media_blob_name = base_no_ext + ".mp4"
+                print(f"  Video candidate: {media_blob_name}")
 
-            # STEP 1: GENERATE SIGNED URLs AND TRIGGER MAKE.COM
-            print("[make] Generating signed URL for Make.com...")
-            signed_url = _generate_signed_url(bucket_name, media_blob_name)
-            thumb_signed_url = ""
-            try:
-                thumb_signed_url = _generate_signed_url(bucket_name, thumbnail_blob_name)
-            except Exception:
-                print("[make] WARNING: No thumbnail found or failed to sign.")
+                # Download video from GCS for YouTube/FB
+                local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
 
-            print("[make] Triggering webhook...")
-            _trigger_make_tiktok_scenario(signed_url, thumb_signed_url, fb_video_description, title)
-            print("[make] Make webhook complete.")
+                # Upload to YouTube
+                print(f"Uploading to YouTube (Video): {local_media_path}")
+                _upload_youtube(local_media_path, title, description, tags)
+                print("[youtube] done")
 
-            # STEP 2: DOWNLOAD FOR YOUTUBE/FB
-            local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
+                # Upload to Facebook
+                print(f"Uploading to Facebook (Video): {local_media_path}")
+                _upload_facebook_video(local_media_path, title, fb_video_description)
+                print("[facebook] done")
 
-            # STEP 3: UPLOAD TO YOUTUBE
-            print(f"Uploading to YouTube (Video): {local_media_path}")
-            _upload_youtube(local_media_path, title, description, tags)
-            print("[youtube] done")
-
-            # STEP 4: UPLOAD TO FACEBOOK
-            print(f"Uploading to Facebook (Video): {local_media_path}")
-            _upload_facebook_video(local_media_path, title, fb_video_description)
-            print("[facebook] done")
 
         _create_post_marker(bucket_name, json_blob_name, ".posted", "Success")
 
