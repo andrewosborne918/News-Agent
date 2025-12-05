@@ -322,9 +322,10 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
     # {{DESCRIPTION}}
     # {{DISCLOSURE}}
     combined_description = (
-        f"{affiliate_block}\n\n"
+        
         f"{title}\n\n"
         f"{description}\n\n"
+        f"{affiliate_block}\n\n"
         f"{amazon_disclosure}"
     )
 
