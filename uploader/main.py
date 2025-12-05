@@ -359,22 +359,22 @@ def _process_metadata_json(bucket_name: str, json_blob_name: str) -> tuple[str, 
             _upload_facebook_image(local_media_path, fb_image_caption)
             print("[facebook] done")
 
-            else:  # Video processing (YouTube + Facebook only, no TikTok/Make)
-                media_blob_name = base_no_ext + ".mp4"
-                print(f"  Video candidate: {media_blob_name}")
+        else:  # Video processing (YouTube + Facebook only, no TikTok/Make)
+            media_blob_name = base_no_ext + ".mp4"
+            print(f"  Video candidate: {media_blob_name}")
 
-                # Download video from GCS for YouTube/FB
-                local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
+            # Download video from GCS for YouTube/FB
+            local_media_path = _download_gcs_to_tempfile(bucket_name, media_blob_name)
 
-                # Upload to YouTube
-                print(f"Uploading to YouTube (Video): {local_media_path}")
-                _upload_youtube(local_media_path, title, description, tags)
-                print("[youtube] done")
+            # Upload to YouTube
+            print(f"Uploading to YouTube (Video): {local_media_path}")
+            _upload_youtube(local_media_path, title, description, tags)
+            print("[youtube] done")
 
-                # Upload to Facebook
-                print(f"Uploading to Facebook (Video): {local_media_path}")
-                _upload_facebook_video(local_media_path, title, fb_video_description)
-                print("[facebook] done")
+            # Upload to Facebook
+            print(f"Uploading to Facebook (Video): {local_media_path}")
+            _upload_facebook_video(local_media_path, title, fb_video_description)
+            print("[facebook] done")
 
 
         _create_post_marker(bucket_name, json_blob_name, ".posted", "Success")
