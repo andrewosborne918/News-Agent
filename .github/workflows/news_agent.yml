@@ -52,6 +52,7 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON_PATH: credentials/service_account.json
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           AI_HORDE_API_KEY: ${{ secrets.AI_HORDE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
                   mkdir -p generated 
                   python generate_segments.py --auto --country us --topic politics --duration 3.5 --model "gemini-2.5-flash" --max-words 15 --min-words 10
@@ -69,6 +70,7 @@ jobs:
           NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
           GOOGLE_SHEETS_KEY: ${{ secrets.GOOGLE_SHEETS_KEY }}
           GOOGLE_SERVICE_ACCOUNT_JSON_PATH: credentials/service_account.json
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           mkdir -p credentials generated
           echo "${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_B64 }}" | base64 --decode > credentials/service_account.json
@@ -77,13 +79,15 @@ jobs:
 
       - name: Generate caption with AI
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}  # harmless; mostly unused in CI
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}      # REQUIRED for Groq fallback
         run: |
           python generate_caption.py generated
           TIMESTAMP=$(date +%s)
           export TIMESTAMP
           python generate_video_metadata.py
           echo "$TIMESTAMP" > generated/.timestamp
+
 
       # Authenticate first so subsequent CLI setup and commands pick up creds
       - name: Authenticate to Google Cloud
@@ -211,6 +215,6 @@ jobs:
             --memory=1Gi \
             --timeout=540s \
             --retry \
-            --set-secrets=FACEBOOK_PAGE_TOKEN=FACEBOOK_PAGE_TOKEN:latest,FB_PAGE_ID=FB_PAGE_ID:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_CREDENTIALS_JSON=YOUTUBE_CREDENTIALS_JSON:latest,MAKE_WEBHOOK_URL=MAKE_WEBHOOK_URL:latest \
-            --set-env-vars=GCP_PROJECT=${{ secrets.GCP_PROJECT_ID }},GOOGLE_CLOUD_PROJECT=${{ secrets.CP_PROJECT_ID }} \
+            --set-secrets=FACEBOOK_PAGE_TOKEN=FACEBOOK_PAGE_TOKEN:latest,FB_PAGE_ID=FB_PAGE_ID:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_CREDENTIALS_JSON=YOUTUBE_CREDENTIALS_JSON:latest,MAKE_WEBHOOK_URL=MAKE_WEBHOOK_URL:latest,GROQ_API_KEY=GROQ_API_KEY:latest \
+            --set-env-vars=GCP_PROJECT=${{ secrets.GCP_PROJECT_ID }},GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }} \
             --source=build/gcs-to-social
