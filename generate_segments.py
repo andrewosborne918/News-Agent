@@ -602,27 +602,26 @@ def get_photo_url_for_answer(answer_text: str, article_text: str, question_id: s
 
 def gemini_answer(question: str, article: str, model_name: str) -> str:
     key = os.getenv("GEMINI_API_KEY")
-    if not key:
-        # If no Gemini key at all, let Groq handle everything via fallback helper.
-        print("⚠️  GEMINI_API_KEY missing. Using Groq-only fallback for this answer.")
-        prompt = f"{CONSERVATIVE_SYSTEM}\n\nNews Information:\n{article}\n\nQuestion:\n{question}\n\nYour Report:"
-        try:
-            resp = generate_with_model_fallback(prompt, [model_name, "gemini-2.0-flash", "gemini-2.0-flash-lite"])
-            return (resp.text or "").strip() or "A brief summary could not be generated."
-        except Exception:
-            return "A brief summary based on public reporting. Details are evolving."
+    prompt = f"{CONSERVATIVE_SYSTEM}\n\nNews Information:\n{article}\n\nQuestion:\n{question}\n\nYour Report:"
+    model_fallbacks = [model_name, "gemini-2.0-flash", "gemini-2.0-flash-lite"]
 
     try:
-        genai.configure(api_key=key)
-        prompt = f"{CONSERVATIVE_SYSTEM}\n\nNews Information:\n{article}\n\nQuestion:\n{question}\n\nYour Report:"
-        model_fallbacks = [model_name, "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+        if not key:
+            # If no Gemini key at all, let Groq handle everything via fallback helper.
+            print("⚠️  GEMINI_API_KEY missing. Using Groq-only fallback for this answer.")
+        else:
+            genai.configure(api_key=key)
+
         resp = generate_with_model_fallback(prompt, model_fallbacks)
         txt = (resp.text or "").strip()
-        if txt:
-            return txt
-        return "A brief summary could not be generated."
-    except Exception:
-        return "A brief summary based on public reporting. Details are evolving."
+        if not txt:
+            raise RuntimeError("Empty response from Gemini/Groq")
+        return txt
+
+    except Exception as e:
+        print(f"❌ Failed to generate answer for question '{question[:80]}...': {e}")
+        # Bubble this up so the caller can cancel the whole run
+        raise RuntimeError("Gemini/Groq generation failed") from e
 
 
 # ========================= Main =========================
@@ -723,35 +722,55 @@ def main():
     last_successful_photo = ""
     gemini_request_count = 0
 
-    for qid, qtext in questions:
-        answer = gemini_answer(qtext, article, model_name=args.model)
-        gemini_request_count += 1
+    try:
+        for qid, qtext in questions:
+            answer = gemini_answer(qtext, article, model_name=args.model)
+            gemini_request_count += 1
 
-        sents = limit_sentences_length(
-            to_sentences(answer),
-            max_words=args.max_words,
-            min_words=args.min_words,
-        )
-        image_url = get_photo_url_for_answer(answer, article, qid, args.model, last_successful_photo)
-        if image_url:
-            last_successful_photo = image_url
+            sents = limit_sentences_length(
+                to_sentences(answer),
+                max_words=args.max_words,
+                min_words=args.min_words,
+            )
+            image_url = get_photo_url_for_answer(
+                answer, article, qid, args.model, last_successful_photo
+            )
+            if image_url:
+                last_successful_photo = image_url
 
-        for idx, sent in enumerate(sents):
-            img_path = image_url if not args.image_path_prefix else f"{args.image_path_prefix}{run_id}_{qid}_{idx}.png"
-            rows_to_append.append([run_id, qid, idx, sent, img_path, args.duration])
+            for idx, sent in enumerate(sents):
+                img_path = (
+                    image_url
+                    if not args.image_path_prefix
+                    else f"{args.image_path_prefix}{run_id}_{qid}_{idx}.png"
+                )
+                rows_to_append.append(
+                    [run_id, qid, idx, sent, img_path, args.duration]
+                )
 
-        if gemini_request_count % 4 == 0 and gemini_request_count < len(questions):
-            print("⏳ Pausing for 60 seconds to avoid Gemini rate limit...")
-            time.sleep(60)
+            if gemini_request_count % 4 == 0 and gemini_request_count < len(questions):
+                print("⏳ Pausing for 60 seconds to avoid Gemini rate limit...")
+                time.sleep(60)
+
+    except RuntimeError as e:
+        # If any caption generation fails, cancel the entire run:
+        # - no AnswerSegments
+        # - no Runs row
+        # - no run_id file
+        print(f"❌ Segment generation failed for run {run_id}. Cancelling this run: {e}")
+        return
 
     ws_segments = _with_retry(lambda: sh.worksheet("AnswerSegments"))
     append_rows_safe(ws_segments, rows_to_append)
 
     try:
         ws_runs = _with_retry(lambda: sh.worksheet("Runs"))
-        _with_retry(lambda: ws_runs.append_rows([[
-            run_id, url, title or "", dt.datetime.utcnow().isoformat() + "Z", score
-        ]], value_input_option="RAW"))
+        _with_retry(
+            lambda: ws_runs.append_rows(
+                [[run_id, url, title or "", dt.datetime.utcnow().isoformat() + "Z", score]],
+                value_input_option="RAW",
+            )
+        )
     except Exception:
         pass
 
@@ -763,6 +782,7 @@ def main():
         print("✅ Saved run_id to generated/run_id.txt")
     except Exception as e:
         print(f"⚠️  Could not save run_id.txt: {e}")
+
 
 
 if __name__ == "__main__":
