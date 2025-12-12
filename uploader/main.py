@@ -72,17 +72,18 @@ def gcs_to_social(event):
         print(f"skip: already failed (marker file exists) -> {name}")
         return
 
-    if _marker_exists(bucket, name, ".processing"):
-        print(f"skip: currently processing (lock file exists) -> {name}")
+    # ✅ Atomic lock: only ONE invocation can create ".processing"
+    lock_acquired = _try_create_marker(bucket, name, ".processing", "Processing started")
+    if not lock_acquired:
+        print(f"skip: currently processing (lock already held) -> {name}")
         return
-
-    _create_post_marker(bucket, name, ".processing", "Processing started")
 
     try:
         msg, _status = _process_metadata_json(bucket, name)
         print(msg)
     finally:
-        _delete_marker(bucket, name, ".processing")
+        if lock_acquired:
+            _delete_marker(bucket, name, ".processing")
 
 
 def _download_gcs_to_tempfile(bucket_name: str, blob_name: str) -> str:
@@ -103,6 +104,35 @@ def _marker_exists(bucket_name: str, json_blob_name: str, suffix: str) -> bool:
     marker_key = f"{base_no_ext}{suffix}"
     marker_blob = bucket.blob(marker_key)
     return marker_blob.exists()
+
+
+def _try_create_marker(bucket_name: str, json_blob_name: str, suffix: str, content: str = "") -> bool:
+    """
+    Atomically create a marker file ONLY if it does not already exist.
+    Returns True if we created it (lock acquired), False if it already existed.
+    """
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+
+    base_no_ext = os.path.splitext(json_blob_name)[0]
+    marker_key = f"{base_no_ext}{suffix}"
+    marker_blob = bucket.blob(marker_key)
+
+    try:
+        marker_blob.upload_from_string(
+            data=content.encode("utf-8"),
+            content_type="text/plain",
+            if_generation_match=0,  # ✅ "create only if doesn't exist"
+        )
+        print(f"[marker] created marker {marker_key}")
+        return True
+    except (PreconditionFailed, Conflict):
+        print(f"[marker] marker already exists (lock held): {marker_key}")
+        return False
+    except Exception as e:
+        print(f"[marker] ERROR: failed to create marker {marker_key}: {e}")
+        # If we can't create the lock due to an unexpected error, safest behavior is "do nothing"
+        return False
 
 
 def _create_post_marker(bucket_name: str, json_blob_name: str, suffix: str, content: str = ""):

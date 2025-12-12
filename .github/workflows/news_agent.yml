@@ -1,9 +1,9 @@
 name: News Agent (politics)
 
 on:
-  #schedule:
-    # Runs every hour from 6am to 10pm EST (11:00 UTC to 03:00 UTC)
-    #- cron: "*/30 * * * *"
+  schedule:
+    # Runs every hour; ET window enforced in the job (5am–11pm ET)
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -18,6 +18,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Eastern Time window (5am–11pm ET)
+        run: |
+          HOUR=$(TZ=America/New_York date +%H)
+          if [ "$HOUR" -lt 5 ] || [ "$HOUR" -ge 23 ]; then
+            echo "Outside 5am–11pm ET. Exiting."
+            exit 0
+          fi
 
       - name: Setup Python
         uses: actions/setup-python@v5
