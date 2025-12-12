@@ -1,9 +1,9 @@
 name: News Agent (politics)
 
 on:
-  schedule:
+  #schedule:
     # Runs every hour from 6am to 10pm EST (11:00 UTC to 03:00 UTC)
-    - cron: "*/30 * * * *"
+    #- cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
