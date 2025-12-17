@@ -531,12 +531,14 @@ def get_recent_usedstories_keys(
 def mark_usedstory(sh, *, run_id: str, url: str, title: str, tab_name: str = "UsedStories"):
     """Append a durable dedupe record to UsedStories."""
     if news_picker is None:
+        print(f"  ⚠️ news_picker module not loaded, cannot mark UsedStories")
         return
     ensure_usedstories_tab(sh, tab_name=tab_name)
     canonical = news_picker.canonicalize_url(url)
     url_sha1 = _sha1(canonical) if canonical else ""
     title_fp = news_picker.title_fingerprint(title or "")
     ts = dt.datetime.utcnow().isoformat() + "Z"
+    print(f"  📝 Writing to UsedStories: run={run_id}, url_sha1={url_sha1[:8]}..., title_fp={title_fp[:8]}...")
     try:
         ws = _with_retry(lambda: sh.worksheet(tab_name))
         _with_retry(
@@ -545,8 +547,10 @@ def mark_usedstory(sh, *, run_id: str, url: str, title: str, tab_name: str = "Us
                 value_input_option="RAW",
             )
         )
+        print(f"  ✅ Successfully wrote to UsedStories tab")
     except Exception as e:
-        print(f"  ⚠️ Could not append to UsedStories: {e}")
+        print(f"  ❌ Could not append to UsedStories: {e}")
+        raise  # Re-raise so caller knows it failed
 
 def get_recent_runs_dedupe(sh, num_past: int = 72) -> Tuple[set[str], set[str]]:
     """Return (recent_canonical_urls, recent_title_fingerprints) from the Runs sheet.
@@ -829,6 +833,7 @@ def main():
     recent_used_urlhashes, recent_used_titlefps = get_recent_usedstories_keys(
         sh, num_past=usedstories_lookback
     )
+    print(f"📋 UsedStories dedupe loaded: {len(recent_used_urlhashes)} URL hashes, {len(recent_used_titlefps)} title fingerprints")
 
     url = args.story_url
     title = args.story_title
@@ -907,6 +912,12 @@ def main():
             print(f"✅ Picked unique story: {title} ({url}) score={score:.3f}")
             save_article_data(url, title)
             news_picker.mark_story_as_used(url, title)
+            # Mark in UsedStories immediately so future runs skip this story even if generation fails
+            try:
+                mark_usedstory(sh, run_id=now_run_id(), url=url, title=title or "")
+                print("  ✅ Marked in UsedStories ledger")
+            except Exception as e:
+                print(f"  ⚠️ Could not mark UsedStories immediately (will retry after segments): {e}")
             break
         else:
             sys.exit(f"Could not find a unique article after {max_pick_attempts} attempts.")
