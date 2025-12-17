@@ -270,7 +270,45 @@ def limit_sentences_length(sents: List[str], max_words: int, min_words: int = 10
         else:
             out.extend(wrap_sentence_to_word_limit(combined, max_words))
 
-    return [x for x in out if x]
+    out = [x for x in out if x]
+
+    # Post-pass: aggressively eliminate ultra-short fragments (common with quotes/abbreviations).
+    # Strategy:
+    # - If a segment has <3 words, merge it into the previous segment if it fits.
+    # - Otherwise merge it into the next segment.
+    # - As a last resort, keep it (better than dropping content).
+    i = 0
+    while i < len(out):
+        wc = len(out[i].split())
+        if wc >= 3:
+            i += 1
+            continue
+
+        merged = False
+
+        # Try merge into previous
+        if i > 0:
+            candidate = (out[i - 1].rstrip() + " " + out[i].lstrip()).strip()
+            if len(candidate.split()) <= max_words:
+                out[i - 1] = candidate
+                del out[i]
+                merged = True
+                # stay at same i (new current)
+                continue
+
+        # Try merge into next
+        if not merged and i + 1 < len(out):
+            candidate = (out[i].rstrip() + " " + out[i + 1].lstrip()).strip()
+            if len(candidate.split()) <= max_words:
+                out[i + 1] = candidate
+                del out[i]
+                merged = True
+                continue
+
+        # If we couldn't merge due to max_words constraints, leave it.
+        i += 1
+
+    return out
 
 
 # ========================= Fetch with fallbacks =========================

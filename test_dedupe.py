@@ -54,4 +54,87 @@ if __name__ == "__main__":
     test_title_fingerprint_matches_small_variations()
     test_is_duplicate_candidate_url_and_titlefp()
     test_usedstories_url_hash_stable()
+
+    # Segmentation sanity checks (lightweight, no external deps)
+    def _wrap_sentence_to_word_limit(sent: str, max_words: int):
+        words = sent.split()
+        if len(words) <= max_words:
+            return [sent]
+        out, i = [], 0
+        while i < len(words):
+            chunk = " ".join(words[i:i + max_words]).strip().rstrip(",;: ")
+            if chunk:
+                out.append(chunk)
+            i += max_words
+        return out
+
+    def _limit_sentences_length(sents, max_words: int, min_words: int = 10):
+        out = []
+        buffer = []
+        for s in sents:
+            words = s.split()
+            wc = len(words)
+            if wc > max_words:
+                if buffer:
+                    out.append(" ".join(buffer))
+                    buffer = []
+                out.extend(_wrap_sentence_to_word_limit(s, max_words))
+            elif wc < min_words:
+                buffer.append(s)
+                buffered_words = sum(len(b.split()) for b in buffer)
+                if buffered_words >= min_words:
+                    combined = " ".join(buffer)
+                    if len(combined.split()) <= max_words:
+                        out.append(combined)
+                    else:
+                        out.extend(_wrap_sentence_to_word_limit(combined, max_words))
+                    buffer = []
+            else:
+                if buffer:
+                    combined = " ".join(buffer)
+                    if len(combined.split()) <= max_words:
+                        out.append(combined)
+                    else:
+                        out.extend(_wrap_sentence_to_word_limit(combined, max_words))
+                    buffer = []
+                out.append(s)
+        if buffer:
+            combined = " ".join(buffer)
+            if len(combined.split()) <= max_words:
+                out.append(combined)
+            else:
+                out.extend(_wrap_sentence_to_word_limit(combined, max_words))
+
+        out = [x for x in out if x]
+        i = 0
+        while i < len(out):
+            wc = len(out[i].split())
+            if wc >= 3:
+                i += 1
+                continue
+            if i > 0:
+                candidate = (out[i - 1].rstrip() + " " + out[i].lstrip()).strip()
+                if len(candidate.split()) <= max_words:
+                    out[i - 1] = candidate
+                    del out[i]
+                    continue
+            if i + 1 < len(out):
+                candidate = (out[i].rstrip() + " " + out[i + 1].lstrip()).strip()
+                if len(candidate.split()) <= max_words:
+                    out[i + 1] = candidate
+                    del out[i]
+                    continue
+            i += 1
+        return out
+
+    sents = [
+        "Rep.",
+        "Mike Lawler is calling for a vote.",
+        "Today.",
+        "Lawmakers are debating the bill in committee right now.",
+    ]
+    balanced = _limit_sentences_length(sents, max_words=15, min_words=10)
+    # Goal: avoid ultra-short 1–2 word fragments.
+    assert all(len(x.split()) > 2 for x in balanced), balanced
+
     print("✅ dedupe sanity checks passed")
