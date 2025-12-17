@@ -1,39 +1,166 @@
-# --- Used URLs Management ---
-def get_used_urls():
-    """Read used URLs from .used.txt file."""
-    used = set()
-    try:
-        with open(".used.txt", "r", encoding="utf-8") as f:
-            for line in f:
-                url = line.strip()
-                if url:
-                    used.add(url)
-    except FileNotFoundError:
-        pass
-    return used
+"""news_picker.py
 
-def mark_url_as_used(url: str):
-    """Saves the URL to a local file to prevent re-picking."""
-    try:
-        with open(".used.txt", "a", encoding="utf-8") as f:
-            f.write(url.strip() + "\n")
-    except Exception as e:
-        print(f"⚠️ Failed to mark URL as used: {e}")
-# news_picker.py
-"""
 NewsData.io integration for auto-picking top stories.
 
-Usage:
-    from news_picker import pick_top_story
-    url, title, published_at, score = pick_top_story(country="us", category="politics")
+This module also provides lightweight deduplication helpers.
+
+Why stories were repeating before:
+- URLs were compared as raw strings in `.used.txt`. Many publishers vary URLs with
+  tracking params (utm_*, fbclid, etc.), https/http, or trailing slashes.
+- Title/topic comparison only happened in `generate_segments.py` and depended on
+  Gemini output (which can be unavailable or inconsistent).
+
+Fix:
+- Canonicalize URLs before comparing/storing.
+- Maintain a simple local "recent keys" store of URL + title fingerprints.
 """
 
+from __future__ import annotations
+
+import hashlib
 import os
+import re
+from dataclasses import dataclass
+from typing import Iterable, Optional, Set
+
 import requests
 from datetime import datetime, timezone
 from dateutil import parser as dateparser
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+
+# --------------------------------------------------------------------
+# Dedup helpers
+# --------------------------------------------------------------------
+
+USED_URLS_FILE = os.getenv("NEWS_AGENT_USED_URLS_FILE", ".used.txt")
+RECENT_KEYS_FILE = os.getenv("NEWS_AGENT_RECENT_KEYS_FILE", ".recent_story_keys.txt")
+
+
+_DROP_QUERY_PREFIXES = (
+    "utm_",
+)
+_DROP_QUERY_KEYS = {
+    "fbclid",
+    "gclid",
+    "mc_cid",
+    "mc_eid",
+    "ref",
+    "refsrc",
+    "cmpid",
+    "guccounter",
+}
+
+
+def canonicalize_url(url: str) -> str:
+    """Normalize a URL so the same story compares equal across tracking variants."""
+    if not url:
+        return ""
+    try:
+        u = urlparse(url.strip())
+        scheme = (u.scheme or "https").lower()
+        netloc = (u.netloc or "").lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+
+        # Normalize path (strip trailing slash except root)
+        path = u.path or ""
+        if path != "/":
+            path = path.rstrip("/")
+
+        # Filter tracking query params; stable sort for determinism
+        q = []
+        for k, v in parse_qsl(u.query or "", keep_blank_values=False):
+            kl = k.lower()
+            if any(kl.startswith(pfx) for pfx in _DROP_QUERY_PREFIXES):
+                continue
+            if kl in _DROP_QUERY_KEYS:
+                continue
+            q.append((kl, v))
+        q.sort(key=lambda kv: kv[0])
+        query = urlencode(q, doseq=True)
+
+        return urlunparse((scheme, netloc, path, "", query, ""))
+    except Exception:
+        return url.strip()
+
+
+_TITLE_STOPWORDS = {
+    "a", "an", "the", "and", "or", "but", "to", "of", "in", "on", "for", "with",
+    "at", "by", "from", "as", "is", "are", "was", "were", "be", "been", "being",
+    "this", "that", "these", "those",
+}
+
+
+def normalize_title(title: str) -> str:
+    """Normalize a title for comparison (punctuation/stopwords/case)."""
+    if not title:
+        return ""
+    t = title.lower().strip()
+    t = re.sub(r"[\|\-\u2013\u2014]\s*[^\|\-\u2013\u2014]+$", "", t).strip()  # drop trailing " - Source"
+    t = re.sub(r"[^a-z0-9\s]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    words = [w for w in t.split() if w and w not in _TITLE_STOPWORDS]
+    return " ".join(words)
+
+
+def title_fingerprint(title: str, *, keep_words: int = 12) -> str:
+    """Stable fingerprint so small edits to a headline still match."""
+    norm = normalize_title(title)
+    if not norm:
+        return ""
+    words = norm.split()[:keep_words]
+    joined = " ".join(words)
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()
+
+
+def _read_lines(path: str) -> Set[str]:
+    out: Set[str] = set()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if s:
+                    out.add(s)
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def _append_line(path: str, value: str):
+    if not value:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(value.strip() + "\n")
+    except Exception as e:
+        print(f"⚠️ Failed to write to {path}: {e}")
+
+
+def get_used_urls() -> Set[str]:
+    """Read used canonical URLs from local file."""
+    return _read_lines(USED_URLS_FILE)
+
+
+def mark_url_as_used(url: str):
+    """Save canonical URL to the used-URLs list."""
+    _append_line(USED_URLS_FILE, canonicalize_url(url))
+
+
+def get_recent_story_keys() -> Set[str]:
+    """Read recent story keys (canonical url + title fingerprint) from local file."""
+    return _read_lines(RECENT_KEYS_FILE)
+
+
+def mark_story_as_used(url: str, title: str = ""):
+    """Persist both canonical URL and title fingerprint for robust dedupe."""
+    c = canonicalize_url(url)
+    if c:
+        _append_line(USED_URLS_FILE, c)
+        _append_line(RECENT_KEYS_FILE, f"url:{c}")
+    fp = title_fingerprint(title)
+    if fp:
+        _append_line(RECENT_KEYS_FILE, f"titlefp:{fp}")
 # YOUR LIST OF APPROVED SOURCES
 TARGET_SOURCES = [
     "foxnews.com",
@@ -42,7 +169,31 @@ TARGET_SOURCES = [
     "dailycaller.com"
 ]
 
-def pick_top_story(country="us", category="politics", query=None):
+
+@dataclass(frozen=True)
+class DedupState:
+    used_urls: Set[str]
+    recent_keys: Set[str]
+
+
+def default_dedup_state() -> DedupState:
+    return DedupState(used_urls=get_used_urls(), recent_keys=get_recent_story_keys())
+
+
+def is_duplicate_candidate(url: str, title: str, dedup: Optional[DedupState]) -> bool:
+    """Return True if this story should be excluded based on local dedupe state."""
+    if not dedup:
+        return False
+    c = canonicalize_url(url)
+    if c and (c in dedup.used_urls or f"url:{c}" in dedup.recent_keys):
+        return True
+    fp = title_fingerprint(title)
+    if fp and f"titlefp:{fp}" in dedup.recent_keys:
+        return True
+    return False
+
+
+def pick_top_story(country="us", category="politics", query=None, *, dedup: Optional[DedupState] = None):
     """
     Fetch the most popular or latest headline via NewsData.io.
     Returns (url, title, published_at_datetime_utc, score) or None.
@@ -87,11 +238,14 @@ def pick_top_story(country="us", category="politics", query=None):
     print(f"📰 Found {len(articles)} articles from NewsData.io (from target sources)")
 
     # --- Double-check filter (good practice) ---
-    used_urls = get_used_urls()
+    if dedup is None:
+        dedup = default_dedup_state()
+
     filtered_articles = []
     for a in articles:
         link = a.get("link") or ""
-        if not link or link in used_urls:
+        title = a.get("title") or ""
+        if not link or is_duplicate_candidate(link, title, dedup):
             continue
         try:
             domain = urlparse(link).netloc

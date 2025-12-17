@@ -427,6 +427,40 @@ def append_rows_safe(ws, rows: List[List], batch_size: int = 100):
 
 # ========================= AI Deduplication =========================
 
+def get_recent_runs_dedupe(sh, num_past: int = 12) -> Tuple[set[str], set[str]]:
+    """Return (recent_canonical_urls, recent_title_fingerprints) from the Runs sheet.
+
+    This makes dedupe work even when local `.used.txt` is missing (e.g., CI/Cloud runs).
+    """
+    try:
+        if news_picker is None:
+            return set(), set()
+        ws_runs = _with_retry(lambda: sh.worksheet("Runs"))
+        all_values = _with_retry(lambda: ws_runs.get_all_values())
+        if not all_values or len(all_values) < 2:
+            return set(), set()
+
+        rows = all_values[1:]
+        rows = rows[-num_past:]
+
+        urls: set[str] = set()
+        titlefps: set[str] = set()
+
+        for r in rows:
+            # Runs columns: run_id, story_url, story_title, published_at, popularity_score
+            story_url = (r[1] if len(r) > 1 else "") or ""
+            story_title = (r[2] if len(r) > 2 else "") or ""
+            c = news_picker.canonicalize_url(story_url)
+            if c:
+                urls.add(c)
+            fp = news_picker.title_fingerprint(story_title)
+            if fp:
+                titlefps.add(fp)
+        return urls, titlefps
+    except Exception as e:
+        print(f"  ⚠️ Could not read Runs for dedupe: {e}")
+        return set(), set()
+
 def get_past_topics(sh, num_past: int = 3, model_name: str = "gemini-2.5-flash") -> List[str]:
     key = os.getenv("GEMINI_API_KEY")
     if not key:
@@ -658,6 +692,7 @@ def main():
         sys.exit("No active questions in Questions tab (enabled != TRUE).")
 
     past_topics = get_past_topics(sh, num_past=3, model_name=args.model)
+    recent_run_urls, recent_run_titlefps = get_recent_runs_dedupe(sh, num_past=12)
 
     url = args.story_url
     title = args.story_title
@@ -685,11 +720,29 @@ def main():
                 break
 
             url, title, published_at, score = picked
+
+            # Secondary, sheet-based dedupe (handles ephemeral environments where .used.txt resets)
+            try:
+                c = news_picker.canonicalize_url(url)
+                fp = news_picker.title_fingerprint(title)
+                if c and c in recent_run_urls:
+                    print("❌ URL matches a recent run (Runs sheet). Skipping.")
+                    news_picker.mark_story_as_used(url, title)
+                    time.sleep(1)
+                    continue
+                if fp and fp in recent_run_titlefps:
+                    print("❌ Title is too similar to a recent run (Runs sheet). Skipping.")
+                    news_picker.mark_story_as_used(url, title)
+                    time.sleep(1)
+                    continue
+            except Exception as e:
+                print(f"  ⚠️ Runs-sheet dedupe check failed (continuing): {e}")
+
             article = fetch_article_text(url)
 
             if article.startswith("(Fetch failed"):
                 print(f"❌ Failed to fetch article text for {url}. Skipping.")
-                news_picker.mark_url_as_used(url)
+                news_picker.mark_story_as_used(url, title)
                 time.sleep(1)
                 continue
 
@@ -697,13 +750,13 @@ def main():
                 current_topic = get_current_topic(article, args.model)
                 if is_topic_duplicate(current_topic, past_topics, similarity_threshold=1):
                     print(f"❌ Story topic '{current_topic}' is too similar to past topics. Skipping.")
-                    news_picker.mark_url_as_used(url)
+                    news_picker.mark_story_as_used(url, title)
                     time.sleep(1)
                     continue
 
             print(f"✅ Picked unique story: {title} ({url}) score={score:.3f}")
             save_article_data(url, title)
-            news_picker.mark_url_as_used(url)
+            news_picker.mark_story_as_used(url, title)
             break
         else:
             sys.exit(f"Could not find a unique article after {max_pick_attempts} attempts.")
