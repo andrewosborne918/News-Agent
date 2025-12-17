@@ -44,6 +44,7 @@ jobs:
       - name: Run Image Processor
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
           
@@ -76,6 +77,6 @@ jobs:
             --memory=1Gi \
             --timeout=540s \
             --retry \
-            --set-secrets=FACEBOOK_PAGE_TOKEN=FACEBOOK_PAGE_TOKEN:latest,FB_PAGE_ID=FB_PAGE_ID:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_CREDENTIALS_JSON=YOUTUBE_CREDENTIALS_JSON:latest \
+            --set-secrets=FACEBOOK_PAGE_TOKEN=FACEBOOK_PAGE_TOKEN:latest,FB_PAGE_ID=FB_PAGE_ID:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,YOUTUBE_CREDENTIALS_JSON=YOUTUBE_CREDENTIALS_JSON:latest,GROQ_API_KEY=GROQ_API_KEY:latest \
             --set-env-vars=GCP_PROJECT=${{ secrets.GCP_PROJECT_ID }},GOOGLE_CLOUD_PROJECT=${{ secrets.GCP_PROJECT_ID }} \
             --source=build/gcs-to-social
