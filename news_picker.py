@@ -58,7 +58,9 @@ def canonicalize_url(url: str) -> str:
         return ""
     try:
         u = urlparse(url.strip())
-        scheme = (u.scheme or "https").lower()
+        # Collapse scheme differences (http/https) so the same story matches.
+        # We keep a scheme in the canonical URL just for a single stable string form.
+        scheme = "https"
         netloc = (u.netloc or "").lower()
         if netloc.startswith("www."):
             netloc = netloc[4:]

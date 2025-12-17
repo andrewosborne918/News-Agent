@@ -25,6 +25,7 @@ import re
 import time
 import argparse
 import datetime as dt
+import hashlib
 import json
 import random
 from typing import List, Tuple, Dict, Any
@@ -427,7 +428,89 @@ def append_rows_safe(ws, rows: List[List], batch_size: int = 100):
 
 # ========================= AI Deduplication =========================
 
-def get_recent_runs_dedupe(sh, num_past: int = 12) -> Tuple[set[str], set[str]]:
+def _sha1(s: str) -> str:
+    return hashlib.sha1((s or "").encode("utf-8")).hexdigest()
+
+
+def ensure_usedstories_tab(sh, tab_name: str = "UsedStories"):
+    """Ensure a durable UsedStories tab exists for cross-run dedupe."""
+    try:
+        titles = {ws.title for ws in sh.worksheets()}
+        if tab_name in titles:
+            return
+        ws = _with_retry(lambda: sh.add_worksheet(title=tab_name, rows=2000, cols=6))
+        _with_retry(
+            lambda: ws.append_row(
+                [
+                    "ts_utc",
+                    "canonical_url",
+                    "url_sha1",
+                    "title",
+                    "title_fp",
+                    "run_id",
+                ],
+                value_input_option="RAW",
+            )
+        )
+        print(f"✅ Created Google Sheet tab: {tab_name}")
+    except Exception as e:
+        print(f"  ⚠️ Could not ensure {tab_name} tab: {e}")
+
+
+def get_recent_usedstories_keys(
+    sh,
+    *,
+    num_past: int = 500,
+    tab_name: str = "UsedStories",
+) -> Tuple[set[str], set[str]]:
+    """Return (recent_url_sha1s, recent_title_fps) from UsedStories tab."""
+    try:
+        if news_picker is None:
+            return set(), set()
+        ws = _with_retry(lambda: sh.worksheet(tab_name))
+        all_values = _with_retry(lambda: ws.get_all_values())
+        if not all_values or len(all_values) < 2:
+            return set(), set()
+        rows = all_values[1:]
+        rows = rows[-num_past:]
+
+        url_hashes: set[str] = set()
+        titlefps: set[str] = set()
+        for r in rows:
+            # Columns: ts_utc, canonical_url, url_sha1, title, title_fp, run_id
+            url_sha1 = (r[2] if len(r) > 2 else "") or ""
+            title_fp = (r[4] if len(r) > 4 else "") or ""
+            if url_sha1:
+                url_hashes.add(url_sha1)
+            if title_fp:
+                titlefps.add(title_fp)
+        return url_hashes, titlefps
+    except Exception as e:
+        print(f"  ⚠️ Could not read UsedStories for dedupe: {e}")
+        return set(), set()
+
+
+def mark_usedstory(sh, *, run_id: str, url: str, title: str, tab_name: str = "UsedStories"):
+    """Append a durable dedupe record to UsedStories."""
+    if news_picker is None:
+        return
+    ensure_usedstories_tab(sh, tab_name=tab_name)
+    canonical = news_picker.canonicalize_url(url)
+    url_sha1 = _sha1(canonical) if canonical else ""
+    title_fp = news_picker.title_fingerprint(title or "")
+    ts = dt.datetime.utcnow().isoformat() + "Z"
+    try:
+        ws = _with_retry(lambda: sh.worksheet(tab_name))
+        _with_retry(
+            lambda: ws.append_row(
+                [ts, canonical, url_sha1, title or "", title_fp, run_id],
+                value_input_option="RAW",
+            )
+        )
+    except Exception as e:
+        print(f"  ⚠️ Could not append to UsedStories: {e}")
+
+def get_recent_runs_dedupe(sh, num_past: int = 72) -> Tuple[set[str], set[str]]:
     """Return (recent_canonical_urls, recent_title_fingerprints) from the Runs sheet.
 
     This makes dedupe work even when local `.used.txt` is missing (e.g., CI/Cloud runs).
@@ -692,7 +775,22 @@ def main():
         sys.exit("No active questions in Questions tab (enabled != TRUE).")
 
     past_topics = get_past_topics(sh, num_past=3, model_name=args.model)
-    recent_run_urls, recent_run_titlefps = get_recent_runs_dedupe(sh, num_past=12)
+    # In CI (GitHub Actions), local dedupe files don't persist across runs.
+    # Use sheet-based lookback as the primary guardrail.
+    try:
+        runs_lookback = int(os.getenv("RUNS_DEDUPE_LOOKBACK", "72"))
+    except Exception:
+        runs_lookback = 72
+    recent_run_urls, recent_run_titlefps = get_recent_runs_dedupe(sh, num_past=runs_lookback)
+
+    # Durable cross-run dedupe index (preferred in CI): UsedStories tab.
+    try:
+        usedstories_lookback = int(os.getenv("USEDSTORIES_DEDUPE_LOOKBACK", "500"))
+    except Exception:
+        usedstories_lookback = 500
+    recent_used_urlhashes, recent_used_titlefps = get_recent_usedstories_keys(
+        sh, num_past=usedstories_lookback
+    )
 
     url = args.story_url
     title = args.story_title
@@ -725,6 +823,20 @@ def main():
             try:
                 c = news_picker.canonicalize_url(url)
                 fp = news_picker.title_fingerprint(title)
+                url_hash = _sha1(c) if c else ""
+
+                # Primary durable dedupe (UsedStories ledger)
+                if url_hash and url_hash in recent_used_urlhashes:
+                    print("❌ URL hash matches a recent UsedStories entry. Skipping.")
+                    news_picker.mark_story_as_used(url, title)
+                    time.sleep(1)
+                    continue
+                if fp and fp in recent_used_titlefps:
+                    print("❌ Title is too similar to a recent UsedStories entry. Skipping.")
+                    news_picker.mark_story_as_used(url, title)
+                    time.sleep(1)
+                    continue
+
                 if c and c in recent_run_urls:
                     print("❌ URL matches a recent run (Runs sheet). Skipping.")
                     news_picker.mark_story_as_used(url, title)
@@ -816,11 +928,24 @@ def main():
     ws_segments = _with_retry(lambda: sh.worksheet("AnswerSegments"))
     append_rows_safe(ws_segments, rows_to_append)
 
+    # Record this story in the durable UsedStories ledger so future runs skip it.
+    try:
+        mark_usedstory(sh, run_id=run_id, url=url, title=title or "")
+    except Exception as e:
+        print(f"  ⚠️ Could not mark UsedStories (continuing): {e}")
+
     try:
         ws_runs = _with_retry(lambda: sh.worksheet("Runs"))
+        try:
+            # Store canonical URL so future dedupe matches across tracking/scheme variants.
+            from news_picker import canonicalize_url
+
+            url_to_store = canonicalize_url(url)
+        except Exception:
+            url_to_store = url
         _with_retry(
             lambda: ws_runs.append_rows(
-                [[run_id, url, title or "", dt.datetime.utcnow().isoformat() + "Z", score]],
+                [[run_id, url_to_store, title or "", dt.datetime.utcnow().isoformat() + "Z", score]],
                 value_input_option="RAW",
             )
         )
