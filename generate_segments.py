@@ -502,19 +502,26 @@ def get_recent_usedstories_keys(
     tab_name: str = "UsedStories",
 ) -> Tuple[set[str], set[str]]:
     """Return (recent_url_sha1s, recent_title_fps) from UsedStories tab."""
+    print(f"  🔍 Loading UsedStories dedupe from tab '{tab_name}'...")
     try:
         if news_picker is None:
+            print(f"  ⚠️ news_picker module not loaded, cannot read UsedStories")
             return set(), set()
+        print(f"  📖 Opening worksheet '{tab_name}'...")
         ws = _with_retry(lambda: sh.worksheet(tab_name))
+        print(f"  📖 Reading all values from '{tab_name}'...")
         all_values = _with_retry(lambda: ws.get_all_values())
+        print(f"  📊 Got {len(all_values)} total rows from '{tab_name}'")
         if not all_values or len(all_values) < 2:
+            print(f"  ⚠️ UsedStories tab is empty or only has header row (total rows: {len(all_values) if all_values else 0})")
             return set(), set()
         rows = all_values[1:]
         rows = rows[-num_past:]
+        print(f"  📋 Processing last {len(rows)} rows (requested lookback: {num_past})")
 
         url_hashes: set[str] = set()
         titlefps: set[str] = set()
-        for r in rows:
+        for idx, r in enumerate(rows):
             # Columns: ts_utc, canonical_url, url_sha1, title, title_fp, run_id
             url_sha1 = (r[2] if len(r) > 2 else "") or ""
             title_fp = (r[4] if len(r) > 4 else "") or ""
@@ -522,9 +529,14 @@ def get_recent_usedstories_keys(
                 url_hashes.add(url_sha1)
             if title_fp:
                 titlefps.add(title_fp)
+            if idx == 0:  # Log first row as sample
+                print(f"  📝 Sample row 0: url_sha1={url_sha1[:8] if url_sha1 else '(empty)'}..., title_fp={title_fp[:8] if title_fp else '(empty)'}...")
+        print(f"  ✅ Loaded {len(url_hashes)} unique URL hashes, {len(titlefps)} unique title fingerprints")
         return url_hashes, titlefps
     except Exception as e:
-        print(f"  ⚠️ Could not read UsedStories for dedupe: {e}")
+        print(f"  ❌ Could not read UsedStories for dedupe: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return set(), set()
 
 
