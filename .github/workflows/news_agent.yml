@@ -86,6 +86,14 @@ jobs:
           test -f generated/run_id.txt || (echo "❌ run_id.txt missing" && exit 1)
           echo "✅ All required files present"
 
+      - name: Notify on rate limit failure
+        if: failure()
+        run: |
+          echo "::error title=Content Generation Failed::Segment generation failed due to rate limits or errors. No video will be created. Check Gemini/Groq quotas."
+          echo "❌ WORKFLOW STOPPED: Unable to generate content due to LLM rate limits"
+          echo "📧 Action Required: Check your Gemini API quota at https://aistudio.google.com/app/apikey"
+          echo "📧 Check your Groq API quota at https://console.groq.com/keys"
+
       - name: Generate video
         if: success()
         env:
