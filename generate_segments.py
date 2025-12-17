@@ -42,7 +42,7 @@ from google.api_core.exceptions import ResourceExhausted, InternalServerError
 
 
 # --------------------------------------------------------------------
-# Groq helper + unified Gemini→Groq fallback
+# LLM fallback helpers: Groq + DeepSeek (after Gemini fails)
 # --------------------------------------------------------------------
 
 def _call_groq_chat(prompt: str) -> str | None:
@@ -100,6 +100,61 @@ def _call_groq_chat(prompt: str) -> str | None:
         return None
 
 
+def _call_deepseek_chat(prompt: str) -> str | None:
+    """Call DeepSeek's chat completions API and return the content string, or None on failure."""
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        print("[deepseek] DEEPSEEK_API_KEY not set; skipping DeepSeek fallback.")
+        return None
+
+    data = {
+        "model": "deepseek-chat",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a conservative-leaning news analyst. "
+                    "You answer questions about a news article in short, clear sentences. "
+                    "Always respond directly to the user's prompt."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.4,
+        "max_tokens": 512,
+    }
+
+    body = json.dumps(data).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = resp.read().decode("utf-8")
+        parsed = json.loads(payload)
+        choices = parsed.get("choices") or []
+        if not choices:
+            print("[deepseek] No choices in response.")
+            return None
+        msg = choices[0].get("message", {})
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(str(part.get("text", "")) for part in content)
+        return str(content)
+    except Exception as e:
+        print(f"[deepseek] DeepSeek API call failed: {e}")
+        return None
+
+
 class _SimpleResponse:
     """Tiny wrapper so Groq text looks like a Gemini response (has .text)."""
     def __init__(self, text: str):
@@ -108,8 +163,8 @@ class _SimpleResponse:
 
 def generate_with_model_fallback(prompt: str, model_list: list[str]):
     """
-    Tries to generate content with a list of Gemini models, then falls back to Groq
-    if all Gemini models are exhausted (e.g. 429 quota errors).
+    Tries to generate content with a list of Gemini models, then falls back to Groq,
+    then DeepSeek if all Gemini models are exhausted (e.g. 429 quota errors).
     """
     if not model_list:
         raise ValueError("Model list cannot be empty.")
@@ -152,10 +207,16 @@ def generate_with_model_fallback(prompt: str, model_list: list[str]):
         print("✅ Groq fallback succeeded.")
         return _SimpleResponse(groq_text)
 
-    print("❌ Groq fallback also failed.")
+    print("❌ Groq fallback also failed. Trying DeepSeek as final backup...")
+    deepseek_text = _call_deepseek_chat(prompt)
+    if deepseek_text:
+        print("✅ DeepSeek fallback succeeded.")
+        return _SimpleResponse(deepseek_text)
+
+    print("❌ All LLM providers failed (Gemini, Groq, DeepSeek).")
     if last_error:
         raise last_error
-    raise Exception("Failed to generate content after trying Gemini and Groq.")
+    raise Exception("Failed to generate content after trying Gemini, Groq, and DeepSeek.")
 
 
 # --------------------------------------------------------------------
