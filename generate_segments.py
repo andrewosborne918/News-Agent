@@ -155,6 +155,63 @@ def _call_deepseek_chat(prompt: str) -> str | None:
         return None
 
 
+def _call_openrouter_chat(prompt: str, model: str = "meta-llama/llama-3.3-70b-instruct:free") -> str | None:
+    """Call OpenRouter's chat completions API with free models and return the content string, or None on failure."""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        print("[openrouter] OPENROUTER_API_KEY not set; skipping OpenRouter fallback.")
+        return None
+
+    data = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a conservative-leaning news analyst. "
+                    "You answer questions about a news article in short, clear sentences. "
+                    "Always respond directly to the user's prompt."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.4,
+        "max_tokens": 512,
+    }
+
+    body = json.dumps(data).encode("utf-8")
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": "https://github.com/andrewosborne918/News-Agent",
+            "X-Title": "News Agent",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = resp.read().decode("utf-8")
+        parsed = json.loads(payload)
+        choices = parsed.get("choices") or []
+        if not choices:
+            print(f"[openrouter] No choices in response for model {model}.")
+            return None
+        msg = choices[0].get("message", {})
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(str(part.get("text", "")) for part in content)
+        return str(content)
+    except Exception as e:
+        print(f"[openrouter] OpenRouter API call failed for model {model}: {e}")
+        return None
+
+
 class _SimpleResponse:
     """Tiny wrapper so Groq text looks like a Gemini response (has .text)."""
     def __init__(self, text: str):
@@ -164,7 +221,7 @@ class _SimpleResponse:
 def generate_with_model_fallback(prompt: str, model_list: list[str]):
     """
     Tries to generate content with a list of Gemini models, then falls back to Groq,
-    then DeepSeek if all Gemini models are exhausted (e.g. 429 quota errors).
+    then DeepSeek, then OpenRouter free models if all Gemini models are exhausted (e.g. 429 quota errors).
     """
     if not model_list:
         raise ValueError("Model list cannot be empty.")
@@ -207,16 +264,32 @@ def generate_with_model_fallback(prompt: str, model_list: list[str]):
         print("✅ Groq fallback succeeded.")
         return _SimpleResponse(groq_text)
 
-    print("❌ Groq fallback also failed. Trying DeepSeek as final backup...")
+    print("❌ Groq fallback also failed. Trying DeepSeek as third backup...")
     deepseek_text = _call_deepseek_chat(prompt)
     if deepseek_text:
         print("✅ DeepSeek fallback succeeded.")
         return _SimpleResponse(deepseek_text)
 
-    print("❌ All LLM providers failed (Gemini, Groq, DeepSeek).")
+    print("❌ DeepSeek also failed. Trying OpenRouter free models as final backup...")
+    # Try OpenRouter free models in order of capability (largest to smallest)
+    openrouter_free_models = [
+        "meta-llama/llama-3.1-405b-instruct:free",  # 405B - most capable
+        "nousresearch/hermes-3-llama-3.1-405b:free",  # 405B - alternative
+        "meta-llama/llama-3.3-70b-instruct:free",  # 70B - good balance
+        "mistralai/mistral-7b-instruct:free",  # 7B - fast fallback
+        "meta-llama/llama-3.2-3b-instruct:free",  # 3B - last resort
+    ]
+    for or_model in openrouter_free_models:
+        print(f"  Trying OpenRouter model: {or_model}")
+        or_text = _call_openrouter_chat(prompt, model=or_model)
+        if or_text:
+            print(f"✅ OpenRouter fallback succeeded with {or_model}.")
+            return _SimpleResponse(or_text)
+
+    print("❌ All LLM providers failed (Gemini, Groq, DeepSeek, OpenRouter).")
     if last_error:
         raise last_error
-    raise Exception("Failed to generate content after trying Gemini, Groq, and DeepSeek.")
+    raise Exception("Failed to generate content after trying Gemini, Groq, DeepSeek, and OpenRouter.")
 
 
 # --------------------------------------------------------------------
