@@ -732,7 +732,7 @@ def get_recent_runs_dedupe(sh, num_past: int = 72) -> Tuple[set[str], set[str]]:
         print(f"  ⚠️ Could not read Runs for dedupe: {e}")
         return set(), set()
 
-def get_past_topics(sh, num_past: int = 3, model_name: str = "gemini-2.5-flash") -> List[str]:
+def get_past_topics(sh, num_past: int = 3, model_name: str = "gemini-2.5-flash-lite") -> List[str]:
     key = os.getenv("GEMINI_API_KEY")
     if not key:
         print("  ⚠️ Skipping past topic analysis: GEMINI_API_KEY is missing.")
@@ -946,7 +946,7 @@ def main():
     ap.add_argument("--image-path-prefix", default="", help="Prefix to pre-fill image_path")
     ap.add_argument("--max-words", type=int, default=15, help="Max words per sentence")
     ap.add_argument("--min-words", type=int, default=10, help="Min words per sentence")
-    ap.add_argument("--model", default="gemini-2.5-flash", help="Gemini model")
+    ap.add_argument("--model", default="gemini-2.5-flash-lite", help="Gemini model")
 
     args = ap.parse_args()
     sheet_key, _, _ = load_env_or_die()

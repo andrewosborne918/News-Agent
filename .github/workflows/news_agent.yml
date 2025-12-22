@@ -70,7 +70,7 @@ jobs:
                   # CRITICAL: Wipe generated/ to prevent stale file reuse
                   rm -rf generated
                   mkdir -p generated
-                  python generate_segments.py --auto --country us --topic politics --duration 3.5 --model "gemini-2.5-flash" --max-words 15 --min-words 10
+                  python generate_segments.py --auto --country us --topic politics --duration 3.5 --model "gemini-2.5-flash-lite" --max-words 15 --min-words 10
 
       - name: Install FFmpeg and fonts
         if: success()

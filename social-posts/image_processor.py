@@ -29,7 +29,7 @@ SOURCE_FOLDER_ID = os.environ.get("SOURCE_DRIVE_FOLDER_ID")
 USED_FOLDER_ID = os.environ.get("USED_DRIVE_FOLDER_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GCS_BUCKET = os.environ.get("GCS_BUCKET") 
-MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-2.5-flash")
+MODEL_NAME = os.environ.get("MODEL_NAME", "gemini-2.5-flash-lite")
 FALLBACK_MODEL_NAME = os.environ.get("FALLBACK_MODEL_NAME", "gemini-2.0-flash")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
